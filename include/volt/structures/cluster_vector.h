@@ -1,10 +1,10 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/structures/cluster.h>
-#include <opendxa/structures/cluster_graph.h>
+#include <volt/core/volt.h>
+#include <volt/structures/cluster.h>
+#include <volt/structures/cluster_graph.h>
 
-namespace OpenDXA{
+namespace Volt{
 
 inline constexpr double CA_LATTICE_VECTOR_EPSILON = double(1e-3);
 inline constexpr double CA_ATOM_VECTOR_EPSILON = double(1e-4);

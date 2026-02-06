@@ -1,10 +1,10 @@
 #pragma once
 
-#include <opendxa/analysis/delaunay_tessellation_spatial_query.h>
-#include <opendxa/core/opendxa.h>
-#include <opendxa/utilities/memory_pool.h>
-#include <opendxa/structures/dislocation_network.h>
-#include <opendxa/geometry/interface_mesh.h>
+#include <volt/analysis/delaunay_tessellation_spatial_query.h>
+#include <volt/core/volt.h>
+#include <volt/utilities/memory_pool.h>
+#include <volt/structures/dislocation_network.h>
+#include <volt/geometry/interface_mesh.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/spin_mutex.h>
 #include <unordered_set>
@@ -12,7 +12,7 @@
 #include <random>
 #include <mutex>
 
-namespace OpenDXA{
+namespace Volt{
 
 class BurgersLoopBuilder{
 public:

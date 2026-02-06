@@ -1,6 +1,6 @@
-#include <opendxa/geometry/interface_mesh.h>
-#include <opendxa/analysis/burgers_loop_builder.h>
-#include <opendxa/geometry/manifold_construction_helper.h>
+#include <volt/geometry/interface_mesh.h>
+#include <volt/analysis/burgers_loop_builder.h>
+#include <volt/geometry/manifold_construction_helper.h>
 #include <algorithm>
 #include <array>
 #include <numeric>
@@ -8,7 +8,7 @@
 #include <set> 
 #include <boost/dynamic_bitset.hpp>
 
-namespace OpenDXA{
+namespace Volt{
 
 void InterfaceMesh::makeManifold(){
     auto original_vertices = vertices(); 

@@ -1,7 +1,7 @@
-#include <opendxa/core/opendxa.h>
-#include <opendxa/structures/dislocation_network.h>
+#include <volt/core/volt.h>
+#include <volt/structures/dislocation_network.h>
 
-namespace OpenDXA{
+namespace Volt{
 
 // Reconstruct an independent copy of an existing DislocationNetwork by duplicating
 // each segment's Burger vector, line geometry, and connection information.

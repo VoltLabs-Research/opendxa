@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace OpenDXA {
+namespace Volt {
 
 class MsgpackWriter {
 public:

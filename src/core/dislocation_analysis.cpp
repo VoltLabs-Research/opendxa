@@ -1,14 +1,16 @@
-#include <opendxa/core/dislocation_analysis.h>
-#include <opendxa/analysis/structure_analysis.h>
-#include <opendxa/utilities/concurrence/parallel_system.h>
-#include <opendxa/analysis/analysis_context.h>
-#include <opendxa/analysis/cluster_connector.h>
-#include <opendxa/utilities/msgpack_writer.h>
+#include <volt/core/dislocation_analysis.h>
+#include <volt/core/frame_adapter.h>
+#include <volt/core/analysis_result.h>
+#include <volt/analysis/structure_analysis.h>
+#include <volt/utilities/concurrence/parallel_system.h>
+#include <volt/analysis/analysis_context.h>
+#include <volt/analysis/cluster_connector.h>
+#include <volt/utilities/msgpack_writer.h>
 #include <spdlog/spdlog.h>
 
-namespace OpenDXA{
+namespace Volt{
 
-using namespace OpenDXA::Particles;
+using namespace Volt::Particles;
 
 DislocationAnalysis::DislocationAnalysis()
     : _inputCrystalStructure(LATTICE_FCC),
@@ -74,32 +76,24 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
     json result;
 
     if(frame.natoms <= 0){
-        result["is_failed"] = true;
-        result["error"] = "Invalid number of atoms: " + std::to_string(frame.natoms);
-        return result;
+        return AnalysisResult::failure("Invalid number of atoms: " + std::to_string(frame.natoms));
     }
 
     if(frame.positions.empty()){
-        result["is_failed"] = true;
-        result["error"] = "No position data available";
-        return result;
+        return AnalysisResult::failure("No position data available");
     }
 
     std::shared_ptr<ParticleProperty> positions;
     {
         PROFILE("Create Position Property");
-        positions = createPositionProperty(frame);
+        positions = FrameAdapter::createPositionProperty(frame);
         if(!positions){
-            result["is_failed"] = true;
-            result["error"] = "Failed to create position property";
-            return result;
+            return AnalysisResult::failure("Failed to create position property");
         }
     }
 
-    if(!validateSimulationCell(frame.simulationCell)){
-        result["is_failed"] = true;
-        result["error"] = "Invalid simulation cell";
-        return result;
+    if(!FrameAdapter::validateSimulationCell(frame.simulationCell)){
+        return AnalysisResult::failure("Invalid simulation cell");
     }
 
     // Default orientations (Identity)
@@ -336,48 +330,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
     spdlog::debug("Total time {} ms ", duration);
 
     return result;
-}
-
-std::shared_ptr<ParticleProperty> DislocationAnalysis::createPositionProperty(const LammpsParser::Frame &frame){
-    std::shared_ptr<ParticleProperty> property(new ParticleProperty(
-        frame.natoms, ParticleProperty::PositionProperty, 0, true));
-
-    if(!property || property->size() != frame.natoms){
-        spdlog::error("Failed to allocate ParticleProperty for positions");
-        return nullptr;
-    }
-
-    Point3 *data = property->dataPoint3();
-    if(!data){
-        spdlog::error("Failed to get position data pointer");
-        return nullptr;
-    }
-
-    for(size_t i = 0; i < frame.positions.size() && i < static_cast<size_t>(frame.natoms); i++){
-        data[i] = frame.positions[i];
-    }
-
-    return property;
-}
-
-bool DislocationAnalysis::validateSimulationCell(const SimulationCell &cell){
-    const AffineTransformation &matrix = cell.matrix();
-    for(int i = 0; i < 3; i++){
-        for(int j = 0; j < 3; j++){
-            double val = matrix(i, j);
-            if(std::isnan(val) || std::isinf(val)){
-                spdlog::error("Invalid cell matrix component at ({},{}): {}", i, j, val);
-                return false;
-            }
-        }
-    }
-
-    double volume = cell.volume3D();
-    if(volume <= 0 || std::isnan(volume) || std::isinf(volume)){
-        spdlog::error("Invalid cell volume: {}", volume);
-        return false;
-    }
-    return true;
 }
 
 }

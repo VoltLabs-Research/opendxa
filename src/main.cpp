@@ -1,9 +1,9 @@
-#include <opendxa/cli/common.h>
-#include <opendxa/core/dislocation_analysis.h>
-#include <opendxa/structures/crystal_structure_types.h>
+#include <volt/cli/common.h>
+#include <volt/core/dislocation_analysis.h>
+#include <volt/structures/crystal_structure_types.h>
 
-using namespace OpenDXA;
-using namespace OpenDXA::CLI;
+using namespace Volt;
+using namespace Volt::CLI;
 
 // Local helper functions for parsing
 LatticeStructureType parseCrystalStructure(const std::string& str) {
@@ -26,7 +26,7 @@ StructureAnalysis::Mode parseIdentificationMode(const std::string& str) {
 }
 
 void showUsage(const std::string& name) {
-    printUsageHeader(name, "OpenDXA - Full Dislocation Analysis");
+    printUsageHeader(name, "Volt - Full Dislocation Analysis");
     std::cerr
         << "  --crystalStructure <type>         Reference crystal structure. (BCC|FCC|HCP|CUBIC_DIAMOND|HEX_DIAMOND|SC) [default: BCC]\n"
         << "  --identificationMode <mode>       Structure identification mode. (CNA|PTM|DIAMOND) [default: CNA]\n"
@@ -56,7 +56,7 @@ int main(int argc, char* argv[]) {
     }
     
     auto parallel = initParallelism(opts, false);
-    initLogging("opendxa-dxa", parallel.threads);
+    initLogging("volt-dxa", parallel.threads);
     
     LammpsParser::Frame frame;
     if (!parseFrame(filename, frame)) return 1;

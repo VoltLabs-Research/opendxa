@@ -1,7 +1,7 @@
-#include <opendxa/analysis/delaunay_tessellation_spatial_query.h>
+#include <volt/analysis/delaunay_tessellation_spatial_query.h>
 #include <cassert>
 
-namespace OpenDXA {
+namespace Volt {
 
 DelaunayTessellationSpatialQuery::DelaunayTessellationSpatialQuery(
     const DelaunayTessellation& tess,

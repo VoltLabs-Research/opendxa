@@ -1,10 +1,10 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/core/simulation_cell.h>
-#include <opendxa/geometry/interface_mesh.h>
-#include <opendxa/analysis/burgers_circuit.h>
-#include <opendxa/structures/cluster_vector.h>
+#include <volt/core/volt.h>
+#include <volt/core/simulation_cell.h>
+#include <volt/geometry/interface_mesh.h>
+#include <volt/analysis/burgers_circuit.h>
+#include <volt/structures/cluster_vector.h>
 #include <tbb/spin_mutex.h>
 #include <memory>
 #include <vector>
@@ -13,7 +13,7 @@
 #include <ranges>
 #include <cmath>
 
-namespace OpenDXA{
+namespace Volt{
 
 struct DislocationSegment;
 

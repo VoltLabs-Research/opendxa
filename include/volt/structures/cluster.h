@@ -1,10 +1,10 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
+#include <volt/core/volt.h>
 #include <tbb/spin_mutex.h>
 #include <atomic>
 
-namespace OpenDXA{
+namespace Volt{
 
 inline constexpr double CA_TRANSITION_MATRIX_EPSILON = double(1e-4);
 
@@ -22,7 +22,7 @@ struct ClusterTransition{
 
 	[[nodiscard]] bool isSelfTransition() const{
 		assert((reverse != this) || (cluster1 == cluster2));
-		assert((reverse != this) || OpenDXA::equals(tm, Matrix3::Identity(), CA_TRANSITION_MATRIX_EPSILON));
+		assert((reverse != this) || Volt::equals(tm, Matrix3::Identity(), CA_TRANSITION_MATRIX_EPSILON));
 		assert((reverse != this) || (distance == 0));
 
 		return reverse == this;

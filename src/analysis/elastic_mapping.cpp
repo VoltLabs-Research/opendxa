@@ -1,8 +1,8 @@
-#include <opendxa/core/opendxa.h>
-#include <opendxa/analysis/burgers_loop_builder.h>
-#include <opendxa/analysis/crystal_path_finder.h>
-#include <opendxa/analysis/elastic_mapping.h>
-#include <opendxa/utilities/concurrence/parallel_system.h>
+#include <volt/core/volt.h>
+#include <volt/analysis/burgers_loop_builder.h>
+#include <volt/analysis/crystal_path_finder.h>
+#include <volt/analysis/elastic_mapping.h>
+#include <volt/utilities/concurrence/parallel_system.h>
 #include <tbb/parallel_for.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/parallel_sort.h>
@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <atomic>
 
-namespace OpenDXA{
+namespace Volt{
 
 static constexpr std::array<std::pair<int, int>, 6> tetraEdgeVertices{{
     {0, 1}, {0, 2}, {0, 3},

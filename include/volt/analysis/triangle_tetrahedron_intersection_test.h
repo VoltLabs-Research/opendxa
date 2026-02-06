@@ -1,8 +1,8 @@
-#include <opendxa/core/opendxa.h>
+#include <volt/core/volt.h>
 
 #pragma once
 
-namespace OpenDXA::TetrahedronTriangleIntersection{
+namespace Volt::TetrahedronTriangleIntersection{
 
 constexpr inline double orient2D(const Point2& p1, const Point2& p2, const Point2& p3){
     return (p1.x() - p2.x()) * (p3.y() - p2.y()) - (p1.y() - p2.y()) * (p3.x() - p2.x());

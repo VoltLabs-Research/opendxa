@@ -1,11 +1,11 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/utilities/memory_pool.h>
+#include <volt/core/volt.h>
+#include <volt/utilities/memory_pool.h>
 #include <tbb/spin_mutex.h>
 #include <mutex>
 
-namespace OpenDXA{
+namespace Volt{
 
 struct EmptyHalfEdgeMeshStruct{};
 

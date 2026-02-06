@@ -1,7 +1,7 @@
-#include <opendxa/core/opendxa.h>
-#include <opendxa/analysis/burgers_loop_builder.h>
-#include <opendxa/geometry/interface_mesh.h>
-#include <opendxa/utilities/concurrence/parallel_system.h>
+#include <volt/core/volt.h>
+#include <volt/analysis/burgers_loop_builder.h>
+#include <volt/geometry/interface_mesh.h>
+#include <volt/utilities/concurrence/parallel_system.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
 #include <tbb/blocked_range.h>
@@ -13,7 +13,7 @@
 #include <algorithm> 
 #include <execution>
 
-namespace OpenDXA{
+namespace Volt{
 
 namespace {
 

@@ -1,6 +1,6 @@
-#include <opendxa/utilities/json_exporter.h>
-#include <opendxa/analysis/burgers_circuit.h>
-#include <opendxa/analysis/burgers_loop_builder.h>
+#include <volt/utilities/json_exporter.h>
+#include <volt/analysis/burgers_circuit.h>
+#include <volt/analysis/burgers_loop_builder.h>
 #include <fstream>
 #include <iomanip>
 #include <filesystem>
@@ -12,10 +12,10 @@
 #include <thread>
 #include <future>
 #include <mutex>
-#include <opendxa/utilities/msgpack_writer.h>
-#include <opendxa/analysis/elastic_strain.h>
+#include <volt/utilities/msgpack_writer.h>
+#include <volt/elastic_strain_engine.h>
 
-namespace OpenDXA {
+namespace Volt {
 
 namespace {
 
@@ -1244,7 +1244,7 @@ std::string DXAJsonExporter::getLineDirectionString(const Vector3& direction){
 }
 
 json DXAJsonExporter::getCentroSymmetryData(
-    const CentroSymmetryAnalysis::Engine& engine,
+    const CentroSymmetryEngine& engine,
     const std::vector<int>& ids
 ){
     json out;
@@ -1288,7 +1288,7 @@ json DXAJsonExporter::getCentroSymmetryData(
 }
 
 json DXAJsonExporter::getClusterAnalysisData(
-    const ClusterAnalysis::ClusterAnalysisEngine& engine,
+    const ClusterAnalysisEngine& engine,
     const std::vector<int>& ids
 ){
     json out;
@@ -1660,7 +1660,7 @@ double DXAJsonExporter::calculateAverageVertexDegree(const InterfaceMesh* interf
 }
 
 json DXAJsonExporter::getDisplacementsData(
-    const ComputeDisplacements& engine,
+    const DisplacementsEngine& engine,
     const std::vector<int>& ids
 ){
     json result;
@@ -1734,32 +1734,32 @@ json frameToJson(const LammpsParser::Frame& frame, const BurgersLoopBuilder* tra
 
 }
 // Explicit template instantiations for getMeshData
-template OpenDXA::json OpenDXA::DXAJsonExporter::getMeshData<OpenDXA::HalfEdgeMesh<OpenDXA::InterfaceMeshEdge, OpenDXA::InterfaceMeshFace, OpenDXA::InterfaceMeshVertex>>(
-    const OpenDXA::HalfEdgeMesh<OpenDXA::InterfaceMeshEdge, OpenDXA::InterfaceMeshFace, OpenDXA::InterfaceMeshVertex>& mesh,
-    const OpenDXA::StructureAnalysis& structureAnalysis,
+template Volt::json Volt::DXAJsonExporter::getMeshData<Volt::HalfEdgeMesh<Volt::InterfaceMeshEdge, Volt::InterfaceMeshFace, Volt::InterfaceMeshVertex>>(
+    const Volt::HalfEdgeMesh<Volt::InterfaceMeshEdge, Volt::InterfaceMeshFace, Volt::InterfaceMeshVertex>& mesh,
+    const Volt::StructureAnalysis& structureAnalysis,
     bool includeTopologyInfo,
-    const OpenDXA::InterfaceMesh* interfaceMeshForTopology
+    const Volt::InterfaceMesh* interfaceMeshForTopology
 );
 
-template OpenDXA::json OpenDXA::DXAJsonExporter::getMeshData<OpenDXA::InterfaceMesh>(
-    const OpenDXA::InterfaceMesh& mesh,
-    const OpenDXA::StructureAnalysis& structureAnalysis,
+template Volt::json Volt::DXAJsonExporter::getMeshData<Volt::InterfaceMesh>(
+    const Volt::InterfaceMesh& mesh,
+    const Volt::StructureAnalysis& structureAnalysis,
     bool includeTopologyInfo,
-    const OpenDXA::InterfaceMesh* interfaceMeshForTopology
+    const Volt::InterfaceMesh* interfaceMeshForTopology
 );
 
-template void OpenDXA::DXAJsonExporter::writeMeshMsgpackToFile<OpenDXA::HalfEdgeMesh<OpenDXA::InterfaceMeshEdge, OpenDXA::InterfaceMeshFace, OpenDXA::InterfaceMeshVertex>>(
-    const OpenDXA::HalfEdgeMesh<OpenDXA::InterfaceMeshEdge, OpenDXA::InterfaceMeshFace, OpenDXA::InterfaceMeshVertex>& mesh,
-    const OpenDXA::StructureAnalysis& structureAnalysis,
+template void Volt::DXAJsonExporter::writeMeshMsgpackToFile<Volt::HalfEdgeMesh<Volt::InterfaceMeshEdge, Volt::InterfaceMeshFace, Volt::InterfaceMeshVertex>>(
+    const Volt::HalfEdgeMesh<Volt::InterfaceMeshEdge, Volt::InterfaceMeshFace, Volt::InterfaceMeshVertex>& mesh,
+    const Volt::StructureAnalysis& structureAnalysis,
     bool includeTopologyInfo,
-    const OpenDXA::InterfaceMesh* interfaceMeshForTopology,
+    const Volt::InterfaceMesh* interfaceMeshForTopology,
     const std::string& filePath
 );
 
-template void OpenDXA::DXAJsonExporter::writeMeshMsgpackToFile<OpenDXA::InterfaceMesh>(
-    const OpenDXA::InterfaceMesh& mesh,
-    const OpenDXA::StructureAnalysis& structureAnalysis,
+template void Volt::DXAJsonExporter::writeMeshMsgpackToFile<Volt::InterfaceMesh>(
+    const Volt::InterfaceMesh& mesh,
+    const Volt::StructureAnalysis& structureAnalysis,
     bool includeTopologyInfo,
-    const OpenDXA::InterfaceMesh* interfaceMeshForTopology,
+    const Volt::InterfaceMesh* interfaceMeshForTopology,
     const std::string& filePath
 );

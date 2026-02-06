@@ -1,8 +1,8 @@
-#include <opendxa/utilities/msgpack_writer.h>
+#include <volt/utilities/msgpack_writer.h>
 #include <cstring>
 #include <limits>
 
-namespace OpenDXA {
+namespace Volt {
 
 void MsgpackWriter::write_raw(const void* data, size_t size){
     _os.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));

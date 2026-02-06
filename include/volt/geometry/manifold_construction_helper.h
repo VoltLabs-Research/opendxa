@@ -1,10 +1,10 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/core/simulation_cell.h>
+#include <volt/core/volt.h>
+#include <volt/core/simulation_cell.h>
 #include <spdlog/spdlog.h>
-#include <opendxa/core/particle_property.h>
-#include <opendxa/geometry/delaunay_tessellation.h>
+#include <volt/core/particle_property.h>
+#include <volt/geometry/delaunay_tessellation.h>
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
@@ -20,7 +20,7 @@
 #include <vector>
 #include <algorithm>
 
-namespace OpenDXA{
+namespace Volt{
 
 template<class HalfEdgeStructureType, bool FlipOrientation = false, bool CreateTwoSidedMesh = false>
 class ManifoldConstructionHelper{

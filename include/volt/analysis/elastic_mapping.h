@@ -1,13 +1,13 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/geometry/delaunay_tessellation.h>
-#include <opendxa/utilities/memory_pool.h>
-#include <opendxa/structures/cluster.h>
-#include <opendxa/structures/cluster_graph.h>
-#include <opendxa/analysis/structure_analysis.h>
+#include <volt/core/volt.h>
+#include <volt/geometry/delaunay_tessellation.h>
+#include <volt/utilities/memory_pool.h>
+#include <volt/structures/cluster.h>
+#include <volt/structures/cluster_graph.h>
+#include <volt/analysis/structure_analysis.h>
 
-namespace OpenDXA {
+namespace Volt {
 
 class ElasticMapping{
     struct TessellationEdge{

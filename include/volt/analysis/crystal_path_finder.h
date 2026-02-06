@@ -4,11 +4,11 @@
 #include <cstddef>
 #include <optional>
 #include <boost/dynamic_bitset.hpp>
-#include <opendxa/utilities/memory_pool.h>
-#include <opendxa/structures/cluster_vector.h>
-#include <opendxa/analysis/structure_analysis.h>
+#include <volt/utilities/memory_pool.h>
+#include <volt/structures/cluster_vector.h>
+#include <volt/analysis/structure_analysis.h>
 
-namespace OpenDXA{
+namespace Volt{
 
 class CrystalPathFinder{
 public:

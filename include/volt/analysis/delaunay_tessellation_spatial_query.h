@@ -1,7 +1,7 @@
 #pragma once
 
-#include <opendxa/analysis/triangle_tetrahedron_intersection_test.h>
-#include <opendxa/geometry/delaunay_tessellation.h>
+#include <volt/analysis/triangle_tetrahedron_intersection_test.h>
+#include <volt/geometry/delaunay_tessellation.h>
 #include <boost/geometry.hpp>
 #include <boost/geometry/geometries/point.hpp>
 #include <boost/geometry/geometries/box.hpp>
@@ -11,7 +11,7 @@
 #include <optional>
 #include <utility>
 
-namespace OpenDXA {
+namespace Volt {
 
 struct bPointCell {
     Point3 point;
@@ -21,14 +21,14 @@ struct bPointCell {
 }
 
 BOOST_GEOMETRY_REGISTER_POINT_3D(
-    OpenDXA::bPointCell, 
+    Volt::bPointCell, 
     double, boost::geometry::cs::cartesian, 
     point[0],
     point[1], 
     point[2]
 );
 
-namespace OpenDXA{
+namespace Volt{
 
 // These using declarations now resolve correctly thanks to the above traits.
 using bBox = boost::geometry::model::box<bPointCell>;

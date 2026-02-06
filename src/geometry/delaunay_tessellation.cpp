@@ -1,11 +1,11 @@
-#include <opendxa/core/opendxa.h>
-#include <opendxa/geometry/delaunay_tessellation.h>
+#include <volt/core/volt.h>
+#include <volt/geometry/delaunay_tessellation.h>
 #include <omp.h>
 
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_real.hpp>
 
-namespace OpenDXA{
+namespace Volt{
 
 // Generates a 3D Delaunay mesh of your points under periodic boundaries. 
 // Each input is wrapped into the main cell, nudged by a tiny fixed random jitter 

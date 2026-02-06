@@ -1,20 +1,22 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/structures/crystal_structure_types.h>
-#include <opendxa/structures/dislocation_network.h>
-#include <opendxa/geometry/delaunay_tessellation.h>
-#include <opendxa/analysis/elastic_mapping.h>
-#include <opendxa/analysis/burgers_loop_builder.h>
-#include <opendxa/geometry/interface_mesh.h>
-#include <opendxa/math/lin_alg.h>
-#include <opendxa/utilities/json_exporter.h>
+#include <volt/core/volt.h>
+#include <volt/core/frame_adapter.h>
+#include <volt/core/analysis_result.h>
+#include <volt/structures/crystal_structure_types.h>
+#include <volt/structures/dislocation_network.h>
+#include <volt/geometry/delaunay_tessellation.h>
+#include <volt/analysis/elastic_mapping.h>
+#include <volt/analysis/burgers_loop_builder.h>
+#include <volt/geometry/interface_mesh.h>
+#include <volt/math/lin_alg.h>
+#include <volt/utilities/json_exporter.h>
 #include <format> 
 #include <vector>
 #include <memory>
 #include <string>
 
-namespace OpenDXA {
+namespace Volt {
 
 class DislocationAnalysis {
 public:
@@ -55,9 +57,6 @@ private:
     bool _onlyPerfectDislocations;
     
     mutable DXAJsonExporter _jsonExporter;
-
-    std::shared_ptr<Particles::ParticleProperty> createPositionProperty(const LammpsParser::Frame &frame);
-    bool validateSimulationCell(const SimulationCell &cell);
 };
 
 }

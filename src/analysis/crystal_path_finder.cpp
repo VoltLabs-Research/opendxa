@@ -1,7 +1,7 @@
-#include <opendxa/core/opendxa.h>
-#include <opendxa/analysis/crystal_path_finder.h>
+#include <volt/core/volt.h>
+#include <volt/analysis/crystal_path_finder.h>
 
-namespace OpenDXA{
+namespace Volt{
 
 // Finds an atom-to-atom path from atom 1 to atom 2 that lies entirely in the good
 // crystal region. Returns true if a path could be found and stores the corresponding ideal

@@ -4,11 +4,11 @@
 #include <cstddef>
 #include <vector>
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/structures/cluster_vector.h>
-#include <opendxa/geometry/interface_mesh.h>
+#include <volt/core/volt.h>
+#include <volt/structures/cluster_vector.h>
+#include <volt/geometry/interface_mesh.h>
 
-namespace OpenDXA{
+namespace Volt{
 
 // Represents one node in the dislocation network.
 struct DislocationNode;

@@ -1,15 +1,15 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/core/simulation_cell.h>
-#include <opendxa/core/particle_property.h>
+#include <volt/core/volt.h>
+#include <volt/core/simulation_cell.h>
+#include <volt/core/particle_property.h>
 #include <boost/iterator/counting_iterator.hpp>
 
 #include <Delaunay_psm.h>
 #include <vector>
 #include <utility>
 
-namespace OpenDXA{
+namespace Volt{
 
 class DelaunayTessellation{
 public:

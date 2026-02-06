@@ -1,11 +1,11 @@
 #pragma once
 
-#include <opendxa/core/opendxa.h>
-#include <opendxa/geometry/half_edge_mesh.h>
-#include <opendxa/analysis/elastic_mapping.h>
+#include <volt/core/volt.h>
+#include <volt/geometry/half_edge_mesh.h>
+#include <volt/analysis/elastic_mapping.h>
 #include <atomic>
 
-namespace OpenDXA{
+namespace Volt{
 
 struct BurgersCircuit;
 struct BurgersCircuitSearchStruct;
