@@ -18,9 +18,9 @@ class OpenDXAConan(ConanFile):
         "displacement-analysis/1.0.0",
         "elastic-strain/1.0.0",
         "grain-segmentation/1.0.0",
-        "spdlog/1.14.1",  # Logging, needs explicit linking for executables
-        "fmt/10.2.1",  # Formatting, needs explicit linking for executables
-        "nlohmann_json/3.11.3",  # Header-only, needs explicit require
+        "spdlog/1.14.1",
+        "fmt/10.2.1",
+        "nlohmann_json/3.11.3",
     )
     exports_sources = "CMakeLists.txt", "include/*", "src/*"
 
