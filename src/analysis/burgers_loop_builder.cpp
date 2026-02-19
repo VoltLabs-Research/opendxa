@@ -10,8 +10,12 @@
 #include <vector>
 #include <ranges>
 #include <atomic>
-#include <algorithm> 
-#include <execution>
+#include <tbb/enumerable_thread_specific.h>
+#include <algorithm>
+#include <cstdlib>
+#include <string>
+#include <cctype>
+#include <unordered_set>
 
 namespace Volt{
 
@@ -86,8 +90,16 @@ void BurgersLoopBuilder::traceDislocationSegments(){
     mesh().clearFaceFlag(0);
     std::vector<DislocationNode*> dangling;
 
-	// Incrementally extend search radius for new Burgers circuit and extend existing segments by enlarging
-	// the maximim circuit size until segments meet at a junction.
+    // Incrementally extend search radius for new Burgers circuit and extend existing segments by enlarging
+    // the maximim circuit size until segments meet at a junction.
+    bool parallelPrimarySearch = true;
+    if(const char* value = std::getenv("OPENDXA_SERIAL_CIRCUITS"); value != nullptr){
+        std::string text = value;
+        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c){
+            return static_cast<char>(std::tolower(c));
+        });
+        parallelPrimarySearch = !(text == "1" || text == "true" || text == "yes" || text == "on");
+    }
     for(int circuitLength : std::views::iota(3, _maxExtendedBurgersCircuitSize + 1)){
         dangling.assign(_danglingNodes.begin(), _danglingNodes.end());
 
@@ -102,7 +114,11 @@ void BurgersLoopBuilder::traceDislocationSegments(){
 		// interface mesh and then moving them in both directions along
 		// the dislocation segment.
         if((circuitLength & 1) && circuitLength <= _maxBurgersCircuitSize){
-            findPrimarySegments(circuitLength);
+            if(parallelPrimarySearch){
+                findPrimarySegments(circuitLength);
+            }else{
+                findPrimarySegmentsSerial(circuitLength);
+            }
         }
 
 		// Join segments forming dislocation junctions
@@ -110,13 +126,16 @@ void BurgersLoopBuilder::traceDislocationSegments(){
 
 		// Store circuits of dangling ends
         if(circuitLength >= _maxBurgersCircuitSize){
-			std::for_each(std::execution::par, dangling.begin(), dangling.end(), [](DislocationNode* node){
-				auto* circuit = node->circuit;
-				if(circuit->isDangling && circuit->segmentMeshCap.empty()){
-					circuit->storeCircuit();
-					circuit->numPreliminaryPoints = 0;
-				}
-			});
+			tbb::parallel_for(tbb::blocked_range<size_t>(0, dangling.size()),
+				[&dangling](const tbb::blocked_range<size_t>& r){
+					for(size_t i = r.begin(); i < r.end(); ++i){
+						auto* circuit = dangling[i]->circuit;
+						if(circuit->isDangling && circuit->segmentMeshCap.empty()){
+							circuit->storeCircuit();
+							circuit->numPreliminaryPoints = 0;
+						}
+					}
+				});
         }
     }
 }
@@ -138,8 +157,8 @@ void BurgersLoopBuilder::finishDislocationSegments(int crystalStructure){
     // Also assign consecutive IDs to final segments.
     for(int segmentIndex = 0; segmentIndex < network().segments().size(); segmentIndex++){
         DislocationSegment* segment = network().segments()[segmentIndex];
-        std::deque<Point3>& line = segment->line;
-        std::deque<int>& coreSize = segment->coreSize;
+        std::vector<Point3>& line = segment->line;
+        std::vector<int>& coreSize = segment->coreSize;
         segment->id = segmentIndex;
         assert(coreSize.size() == line.size());
         assert(segment->backwardNode().circuit->numPreliminaryPoints + segment->forwardNode().circuit->numPreliminaryPoints <= line.size());
@@ -164,7 +183,7 @@ void BurgersLoopBuilder::finishDislocationSegments(int crystalStructure){
 
     // Align dislocations.
     for(DislocationSegment* segment : network().segments()){
-        std::deque<Point3>& line = segment->line;
+        std::vector<Point3>& line = segment->line;
 		// TODO:
         //assert(line.size() >= 2);
 
@@ -228,19 +247,41 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
     
     // Thread-safe container for found candidates
     tbb::concurrent_vector<CircuitCandidate> candidates;
+
+    struct ThreadLocalSearchBuffers {
+        MemoryPool<SearchNode> pool;
+        std::vector<SearchNode*> queue;
+        std::vector<SearchNode*> visited_nodes;
+        std::vector<size_t> touched_indices;
+
+        explicit ThreadLocalSearchBuffers(size_t count)
+            : pool(1024), visited_nodes(count, nullptr){
+            touched_indices.reserve(1024);
+        }
+    };
+
+    tbb::enumerable_thread_specific<ThreadLocalSearchBuffers> searchBuffers(
+        [vertexCount]{
+            return ThreadLocalSearchBuffers{vertexCount};
+        }
+    );
     
     // Parallel BFS over all vertices
     tbb::parallel_for(tbb::blocked_range<size_t>(0, vertexCount, 1024),
         [&](const tbb::blocked_range<size_t>& r){
-        // Thread-local data structures
-        MemoryPool<SearchNode> pool(1024);
-        std::vector<SearchNode*> queue;
-        std::unordered_map<InterfaceMesh::Vertex*, SearchNode*> visited_map;
+        auto& buffers = searchBuffers.local();
+        auto& pool = buffers.pool;
+        auto& queue = buffers.queue;
+        auto& visited_nodes = buffers.visited_nodes;
+        auto& touched_indices = buffers.touched_indices;
         
         for(size_t i = r.begin(); i < r.end(); ++i){
             auto* startVert = mesh().vertex(i);
             queue.clear();
-            visited_map.clear();
+            for(size_t touchedIndex : touched_indices){
+                visited_nodes[touchedIndex] = nullptr;
+            }
+            touched_indices.clear();
             pool.clear(true);
 
             auto* root = pool.construct();
@@ -249,7 +290,8 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
             root->tm.setIdentity();
             root->depth = 0;
             root->viaEdge = nullptr;
-            visited_map[startVert] = root;
+            visited_nodes[i] = root;
+            touched_indices.push_back(i);
             queue.push_back(root);
 
             for(size_t qi = 0; qi < queue.size(); ++qi){
@@ -260,11 +302,11 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
                     if(edge->nextCircuitEdge || (edge->face() && edge->face()->circuit)) continue;
 
                     auto* nbVert = edge->vertex2();
+                    const size_t nbIndex = static_cast<size_t>(nbVert->index());
                     Point3 nbCoord = cur->coord + cur->tm * edge->clusterVector;
 
-                    auto it = visited_map.find(nbVert);
-                    if(it != visited_map.end()){
-                        auto* prevStruct = it->second;
+                    SearchNode* prevStruct = visited_nodes[nbIndex];
+                    if(prevStruct != nullptr){
                         Vector3 b = prevStruct->coord - nbCoord;
 			if(!b.isZero(CA_LATTICE_VECTOR_EPSILON)){
                             Matrix3 R = cur->tm * edge->clusterTransition->reverse->tm;
@@ -286,7 +328,8 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
                         nb->tm = edge->clusterTransition->isSelfTransition()
                             ? cur->tm
                             : cur->tm * edge->clusterTransition->reverse->tm;
-                        visited_map[nbVert] = nb;
+                        visited_nodes[nbIndex] = nb;
+                        touched_indices.push_back(nbIndex);
                         queue.push_back(nb);
                     }
                 }
@@ -302,23 +345,52 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
             return a.vertexIndex < b.vertexIndex;
         });
     
+    // Helper: uses relaxed atomic loads to read pointers that may be concurrently
+    // written under _circuitCreationMutex. This avoids UB from non-atomic read/write
+    // races. The read is a heuristic skip; correctness is ensured by the re-check
+    // under lock at circuit creation time.
+    using EdgePtr = HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>::Edge*;
+    using CircuitPtr = BurgersCircuit*;
+    
+    auto edgeIsUsed = [](InterfaceMesh::Edge* e) -> bool {
+        auto nce = std::atomic_ref<EdgePtr>(e->nextCircuitEdge).load(std::memory_order_relaxed);
+        if(nce) return true;
+        auto* f = e->face();
+        if(f){
+            auto c = std::atomic_ref<CircuitPtr>(f->circuit).load(std::memory_order_relaxed);
+            if(c) return true;
+        }
+        return false;
+    };
+
     tbb::parallel_for(tbb::blocked_range<size_t>(0, sortedCandidates.size(), 32),
         [&](const tbb::blocked_range<size_t>& r){
-        // Thread-local data structures for BFS
-        MemoryPool<SearchNode> pool(1024);
-        std::vector<SearchNode*> queue;
-        std::unordered_map<InterfaceMesh::Vertex*, SearchNode*> visited_map;
+        auto& buffers = searchBuffers.local();
+        auto& pool = buffers.pool;
+        auto& queue = buffers.queue;
+        auto& visited_nodes = buffers.visited_nodes;
+        auto& touched_indices = buffers.touched_indices;
         
         for(size_t idx = r.begin(); idx < r.end(); ++idx){
             const auto& candidate = sortedCandidates[idx];
             auto* edge = candidate.edge;
+
+            if(!edge->tryClaimForCircuit()){
+                continue;
+            }
             
             // Quick check without lock - skip if obviously already used
-            if(edge->nextCircuitEdge || (edge->face() && edge->face()->circuit)) continue;
+            if(edgeIsUsed(edge)){
+                edge->releaseCircuitClaim();
+                continue;
+            }
             
             auto* startVert = mesh().vertex(candidate.vertexIndex);
             queue.clear();
-            visited_map.clear();
+            for(size_t touchedIndex : touched_indices){
+                visited_nodes[touchedIndex] = nullptr;
+            }
+            touched_indices.clear();
             pool.clear(true);
 
             auto* root = pool.construct();
@@ -327,28 +399,29 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
             root->tm.setIdentity();
             root->depth = 0;
             root->viaEdge = nullptr;
-            visited_map[startVert] = root;
+            visited_nodes[candidate.vertexIndex] = root;
+            touched_indices.push_back(candidate.vertexIndex);
             queue.push_back(root);
 
-            // Rebuild visited_map up to the edge (read-only traversal, safe in parallel)
+            // Rebuild visited lookup up to the edge (read-only traversal, safe in parallel)
             bool shouldCreate = false;
             for(size_t qi = 0; qi < queue.size() && !shouldCreate; ++qi){
                 auto* cur = queue[qi];
 
                 for(auto* e = cur->node->edges(); e != nullptr && !shouldCreate; e = e->nextVertexEdge()){
-                    if(e->nextCircuitEdge || (e->face() && e->face()->circuit)) continue;
+                    if(edgeIsUsed(e)) continue;
 
                     auto* nbVert = e->vertex2();
+                    const size_t nbIndex = static_cast<size_t>(nbVert->index());
                     Point3 nbCoord = cur->coord + cur->tm * e->clusterVector;
 
-                    auto it = visited_map.find(nbVert);
-                    if(it != visited_map.end()){
-                        auto* prevStruct = it->second;
+                    SearchNode* prevStruct = visited_nodes[nbIndex];
+                    if(prevStruct != nullptr){
                         Vector3 b = prevStruct->coord - nbCoord;
 			if(!b.isZero(CA_LATTICE_VECTOR_EPSILON)){
                             Matrix3 R = cur->tm * e->clusterTransition->reverse->tm;
 						if(R.equals(prevStruct->tm, CA_TRANSITION_MATRIX_EPSILON)){
-                                if(!e->nextCircuitEdge && !(e->face() && e->face()->circuit)){
+                                if(!edgeIsUsed(e)){
                                     if(e == edge){
                                         shouldCreate = true;
                                     }
@@ -364,7 +437,8 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
                         nb->tm = e->clusterTransition->isSelfTransition()
                             ? cur->tm
                             : cur->tm * e->clusterTransition->reverse->tm;
-                        visited_map[nbVert] = nb;
+                        visited_nodes[nbIndex] = nb;
+                        touched_indices.push_back(nbIndex);
                         queue.push_back(nb);
                     }
                 }
@@ -375,11 +449,81 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
                 tbb::spin_mutex::scoped_lock lock(_circuitCreationMutex);
                 // Re-check after acquiring lock (another thread may have claimed it)
                 if(!edge->nextCircuitEdge && !(edge->face() && edge->face()->circuit)){
-                    createBurgersCircuit(edge, maxBurgersCircuitSize, visited_map);
+                    createBurgersCircuit(edge, maxBurgersCircuitSize, visited_nodes);
+                }
+            }
+
+            edge->releaseCircuitClaim();
+        }
+    });
+}
+
+void BurgersLoopBuilder::findPrimarySegmentsSerial(int maxBurgersCircuitSize){
+    const int searchDepth = (maxBurgersCircuitSize - 1) / 2;
+    const size_t vertexCount = mesh().vertexCount();
+
+    MemoryPool<SearchNode> pool(1024);
+    std::vector<SearchNode*> queue;
+    std::vector<SearchNode*> visited_nodes(vertexCount, nullptr);
+    std::vector<size_t> touched_indices;
+    touched_indices.reserve(1024);
+
+    for(size_t i = 0; i < vertexCount; ++i){
+        auto* startVert = mesh().vertex(i);
+        queue.clear();
+        for(size_t touchedIndex : touched_indices){
+            visited_nodes[touchedIndex] = nullptr;
+        }
+        touched_indices.clear();
+        pool.clear(true);
+
+        auto* root = pool.construct();
+        root->node = startVert;
+        root->coord = Point3::Origin();
+        root->tm.setIdentity();
+        root->depth = 0;
+        root->viaEdge = nullptr;
+        visited_nodes[i] = root;
+        touched_indices.push_back(i);
+        queue.push_back(root);
+
+        for(size_t qi = 0; qi < queue.size(); ++qi){
+            auto* cur = queue[qi];
+
+            for(auto* edge = cur->node->edges(); edge != nullptr; edge = edge->nextVertexEdge()){
+                if(edge->nextCircuitEdge || (edge->face() && edge->face()->circuit)) continue;
+
+                auto* nbVert = edge->vertex2();
+                const size_t nbIndex = static_cast<size_t>(nbVert->index());
+                Point3 nbCoord = cur->coord + cur->tm * edge->clusterVector;
+
+                SearchNode* prevStruct = visited_nodes[nbIndex];
+                if(prevStruct != nullptr){
+                    Vector3 b = prevStruct->coord - nbCoord;
+                    if(!b.isZero(CA_LATTICE_VECTOR_EPSILON)){
+                        Matrix3 R = cur->tm * edge->clusterTransition->reverse->tm;
+                        if(R.equals(prevStruct->tm, CA_TRANSITION_MATRIX_EPSILON)){
+                            if(!edge->nextCircuitEdge && !(edge->face() && edge->face()->circuit)){
+                                createBurgersCircuit(edge, maxBurgersCircuitSize, visited_nodes);
+                            }
+                        }
+                    }
+                }else if(cur->depth < searchDepth){
+                    auto* nb = pool.construct();
+                    nb->node = nbVert;
+                    nb->coord = nbCoord;
+                    nb->depth = cur->depth + 1;
+                    nb->viaEdge = edge;
+                    nb->tm = edge->clusterTransition->isSelfTransition()
+                        ? cur->tm
+                        : cur->tm * edge->clusterTransition->reverse->tm;
+                    visited_nodes[nbIndex] = nb;
+                    touched_indices.push_back(nbIndex);
+                    queue.push_back(nb);
                 }
             }
         }
-    });
+    }
 }
 
 
@@ -392,13 +536,16 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
 // passes all these tests, it converts the loop into a new dislocation segment-a small dotted line 
 // that is then refined and extended-and if not, it undoes the layout and discards that circuit. 
 // This accurately captures every real Burgers loop in the crystal and prepares it for dislocation analysis.
-bool BurgersLoopBuilder::createBurgersCircuit(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize, const std::unordered_map<InterfaceMesh::Vertex*, SearchNode*>& visited_map){
+bool BurgersLoopBuilder::createBurgersCircuit(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize, const std::vector<SearchNode*>& visited_nodes){
 	//assert(edge->circuit == nullptr);
 
 	InterfaceMesh::Vertex* currentNode = edge->vertex1();
 	InterfaceMesh::Vertex* neighborNode = edge->vertex2();
-	SearchNode* currentStruct = visited_map.at(currentNode);
-	SearchNode* neighborStruct = visited_map.at(neighborNode);
+	SearchNode* currentStruct = visited_nodes[static_cast<size_t>(currentNode->index())];
+	SearchNode* neighborStruct = visited_nodes[static_cast<size_t>(neighborNode->index())];
+	if(!currentStruct || !neighborStruct){
+		return false;
+	}
 	//assert(currentStruct != neighborStruct);
 
 	// Reconstruct the Burgers circuit from the path we took along the mesh edges.
@@ -414,7 +561,7 @@ bool BurgersLoopBuilder::createBurgersCircuit(InterfaceMesh::Edge* edge, int max
 	for(SearchNode* a = currentStruct; ; ){
 		local_visited.insert(a->node);
 		if(a->viaEdge == nullptr) break;
-        a = visited_map.at(a->viaEdge->vertex1());
+        a = visited_nodes[static_cast<size_t>(a->viaEdge->vertex1()->index())];
 	}
 
 	// Then walk on the second branch again until we hit the first branch.
@@ -430,7 +577,7 @@ bool BurgersLoopBuilder::createBurgersCircuit(InterfaceMesh::Edge* edge, int max
 		forwardCircuit->firstEdge->circuit = forwardCircuit;
         
         if(a->viaEdge == nullptr) break;
-        a = visited_map.at(a->viaEdge->vertex1());
+		a = visited_nodes[static_cast<size_t>(a->viaEdge->vertex1()->index())];
 	}
 
 	// Walk along the first branch again until the second branch is hit.
@@ -443,7 +590,7 @@ bool BurgersLoopBuilder::createBurgersCircuit(InterfaceMesh::Edge* edge, int max
 		local_visited.erase(a->node);
 
         if(a->viaEdge == nullptr) break;
-        a = visited_map.at(a->viaEdge->vertex1());
+		a = visited_nodes[static_cast<size_t>(a->viaEdge->vertex1()->index())];
 	}
 
 	// Close circuit.
@@ -1070,53 +1217,80 @@ void BurgersLoopBuilder::identifyNodeCoreAtoms(DislocationNode& node, const Poin
     std::vector<BoxValue> ranges;
     _spatialQuery->getOverlappingCells(bbox, ranges);
 
+	struct CoreAtomCandidate {
+		int cellIdx;
+		std::array<int, 4> atomIndices;
+	};
+
+	const bool hasSegmentMeshCap = !node.circuit->segmentMeshCap.empty();
+
+	tbb::enumerable_thread_specific<std::vector<CoreAtomCandidate>> threadCandidates;
+
 	// Parallel loop over all overlapping Delaunay cells
-	#pragma omp parallel for schedule(static,256) default(none) \
-        shared(ranges, tessellation, triangles, _cellDataForCoreAtomIdentification, node, _coreAtomIndices)
-    for(size_t idx = 0; idx < ranges.size(); ++idx){
-        const BoxValue& boxval = ranges[idx];
-        const bBox& bbox = boxval.first;
-        size_t cell = boxval.second;
+	tbb::parallel_for(tbb::blocked_range<size_t>(0, ranges.size(), 256),
+		[&](const tbb::blocked_range<size_t>& r){
+		auto& localCandidates = threadCandidates.local();
 
-        //assert(bbox.max_corner().cell == bbox.min_corner().cell);
+		for(size_t idx = r.begin(); idx < r.end(); ++idx){
+			const BoxValue& boxval = ranges[idx];
+			size_t cell = boxval.second;
 
-        int cellIdx = tessellation.getUserField(cell);
-        //assert(cellIdx == -1 || cellIdx < static_cast<int>(_cellDataForCoreAtomIdentification.size()));
+			int cellIdx = tessellation.getUserField(cell);
+			if(cellIdx == -1){
+				continue;
+			}
 
-        // Skip cells already assigned to a dislocation
-        if(cellIdx == -1 || _cellDataForCoreAtomIdentification[cellIdx].first){
-            continue;
-        }
+			std::array<Point3, 4> tet;
+			for(size_t t = 0; t < tet.size(); ++t){
+				tet[t] = tessellation.vertexPosition(tessellation.cellVertex(cell, t));
+			}
 
-        // Get the 4 vertices of this tetrahedron
-        std::array<Point3, 4> tet;
-        for(size_t t = 0; t < tet.size(); ++t){
-            tet[t] = tessellation.vertexPosition(tessellation.cellVertex(cell, t));
-        }
+			for(const auto& triangle : triangles){
+				if(TetrahedronTriangleIntersection::test(tet, triangle)){
+					CoreAtomCandidate candidate;
+					candidate.cellIdx = cellIdx;
+					for(size_t v = 0; v < 4; ++v){
+						candidate.atomIndices[v] = tessellation.cellVertex(cell, v);
+					}
+					localCandidates.push_back(candidate);
+					break;
+				}
+			}
+		}
+	});
 
-        // Test intersection of each triangle with this tetrahedron
-        for(const auto& triangle : triangles){
-            if(TetrahedronTriangleIntersection::test(tet, triangle)){
-                #pragma omp critical(core_atom_marking)
-                {
-                    // Mark this cell as belonging to the current dislocation
-                    _cellDataForCoreAtomIdentification[cellIdx] = {
-                        &node,
-                        !node.circuit->segmentMeshCap.empty()
-                    };
+	std::vector<CoreAtomCandidate> mergedCandidates;
+	size_t totalCandidateCount = 0;
+	for(const auto& perThreadCandidates : threadCandidates){
+		totalCandidateCount += perThreadCandidates.size();
+	}
+	mergedCandidates.reserve(totalCandidateCount);
+	for(const auto& perThreadCandidates : threadCandidates){
+		mergedCandidates.insert(mergedCandidates.end(), perThreadCandidates.begin(), perThreadCandidates.end());
+	}
 
-                    // Mark all 4 atoms of this tetrahedron as core atoms
-                    for(size_t v = 0; v < 4; ++v){
-                        int atomIdx = tessellation.cellVertex(cell, v);
-                        _coreAtomIndices.insert(atomIdx);
-                    }
-                }
+	std::sort(mergedCandidates.begin(), mergedCandidates.end(), [](const CoreAtomCandidate& a, const CoreAtomCandidate& b){
+		if(a.cellIdx != b.cellIdx) return a.cellIdx < b.cellIdx;
+		return a.atomIndices < b.atomIndices;
+	});
 
-				// Done with this cell
-                break;
-            }
-        }
-    }
+	std::lock_guard<std::mutex> lock(_builderMutex);
+	for(const CoreAtomCandidate& candidate : mergedCandidates){
+		if(candidate.cellIdx < 0 || candidate.cellIdx >= static_cast<int>(_cellDataForCoreAtomIdentification.size())){
+			continue;
+		}
+		auto& cellData = _cellDataForCoreAtomIdentification[static_cast<size_t>(candidate.cellIdx)];
+		if(cellData.first){
+			continue;
+		}
+
+		cellData = { &node, hasSegmentMeshCap };
+		for(int atomIdx : candidate.atomIndices){
+			if(atomIdx >= 0 && atomIdx < static_cast<int>(_coreAtomFlags.size())){
+				_coreAtomFlags[static_cast<size_t>(atomIdx)] = uint8_t{1};
+			}
+		}
+	}
 }
 
 // After each successful removal or insertion, compute the segment's new center of mass,
@@ -1138,8 +1312,8 @@ void BurgersLoopBuilder::appendLinePoint(DislocationNode& node){
 		segment.coreSize.push_back(coreSize);
 	}else{
 		// Add a new point to start the line.
-		segment.line.push_front(newPoint);
-		segment.coreSize.push_front(coreSize);
+		segment.line.insert(segment.line.begin(), newPoint);
+		segment.coreSize.insert(segment.coreSize.begin(), coreSize);
 	}
 
 	node.circuit->numPreliminaryPoints++;
@@ -1421,13 +1595,13 @@ void BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 				
 				// Extend arm to junction's exact center point.
                 if(armNode->segment) {
-				    std::deque<Point3>& line = armNode->segment->line;
+				    std::vector<Point3>& line = armNode->segment->line;
 				    if(armNode->isForwardNode()){
 					    line.push_back(line.back() + cell().wrapVector(centerOfMass - line.back()));
 					    armNode->segment->coreSize.push_back(armNode->segment->coreSize.back());
 				    }else{
-					    line.push_front(line.front() + cell().wrapVector(centerOfMass - line.front()));
-					    armNode->segment->coreSize.push_front(armNode->segment->coreSize.front());
+					    line.insert(line.begin(), line.front() + cell().wrapVector(centerOfMass - line.front()));
+					    armNode->segment->coreSize.insert(armNode->segment->coreSize.begin(), armNode->segment->coreSize.front());
 				    }
                 }
 

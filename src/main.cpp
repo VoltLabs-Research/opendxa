@@ -1,6 +1,11 @@
 #include <volt/cli/common.h>
 #include <volt/core/dislocation_analysis.h>
 #include <volt/structures/crystal_structure_types.h>
+#include <tbb/info.h>
+#include <algorithm>
+#include <fstream>
+#include <set>
+#include <string>
 
 using namespace Volt;
 using namespace Volt::CLI;
@@ -37,7 +42,7 @@ void showUsage(const std::string& name) {
         << "  --linePointInterval <float>       Point interval on dislocation lines. [default: 2.5]\n"
         << "  --onlyPerfectDislocations <bool>  Detect only perfect dislocations. [default: false]\n"
         << "  --markCoreAtoms <bool>            Mark dislocation core atoms. [default: false]\n"
-        << "  --threads <int>                   Max worker threads (TBB/OMP). [default: 1]\n";
+        << "  --threads <int>                   Max worker threads (TBB/OMP). [default: auto capped to physical cores]\n";
     printHelpOption();
 }
 
@@ -53,6 +58,64 @@ int main(int argc, char* argv[]) {
     if (hasOption(opts, "--help") || filename.empty()) {
         showUsage(argv[0]);
         return filename.empty() ? 1 : 0;
+    }
+
+    if(!hasOption(opts, "--threads")){
+        const int maxAvailableThreads = static_cast<int>(oneapi::tbb::info::default_concurrency());
+        int physicalCores = 0;
+        std::ifstream cpuinfo("/proc/cpuinfo");
+        if(cpuinfo.is_open()){
+            std::set<std::pair<int, int>> physicalCoreIds;
+            int fallbackCpuCores = 0;
+            int physicalId = -1;
+            int coreId = -1;
+            std::string line;
+
+            while(std::getline(cpuinfo, line)){
+                if(line.empty()){
+                    if(physicalId >= 0 && coreId >= 0){
+                        physicalCoreIds.emplace(physicalId, coreId);
+                    }
+                    physicalId = -1;
+                    coreId = -1;
+                    continue;
+                }
+
+                int parsedValue = 0;
+                const auto separator = line.find(':');
+                if(separator != std::string::npos){
+                    try{
+                        parsedValue = std::stoi(line.substr(separator + 1));
+                    }catch(const std::exception&){
+                        parsedValue = 0;
+                    }
+                }
+
+                if(line.rfind("physical id", 0) == 0){
+                    physicalId = parsedValue;
+                }else if(line.rfind("core id", 0) == 0){
+                    coreId = parsedValue;
+                }else if(line.rfind("cpu cores", 0) == 0){
+                    fallbackCpuCores = std::max(fallbackCpuCores, parsedValue);
+                }
+            }
+
+            if(physicalId >= 0 && coreId >= 0){
+                physicalCoreIds.emplace(physicalId, coreId);
+            }
+
+            if(!physicalCoreIds.empty()){
+                physicalCores = static_cast<int>(physicalCoreIds.size());
+            }else{
+                physicalCores = fallbackCpuCores;
+            }
+        }
+
+        const int defaultThreads = std::max(
+            1,
+            std::min(maxAvailableThreads, physicalCores > 0 ? physicalCores : maxAvailableThreads)
+        );
+        opts["--threads"] = std::to_string(defaultThreads);
     }
     
     auto parallel = initParallelism(opts, false);

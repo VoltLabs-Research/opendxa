@@ -1,5 +1,7 @@
 #include <volt/core/volt.h>
 #include <volt/structures/dislocation_network.h>
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
 
 namespace Volt{
 
@@ -67,17 +69,31 @@ void DislocationNetwork::discardSegment(DislocationSegment* segment){
 // the result with repeated Laplacian passes to remove sharp kinks. 
 // Closed loops are handled differently from open lines so as not to break continuity.
 void DislocationNetwork::smoothDislocationLines(double lineSmoothingLevel, double linePointInterval){
-	for(DislocationSegment* segment : segments()){
-		if(segment->coreSize.empty()) continue;
-		std::deque<Point3> line;
-		std::deque<int> coreSize;
-        coarsenDislocationLine(linePointInterval, segment->line, segment->coreSize, line, coreSize, segment->isClosedLoop(), segment->isInfiniteLine());
-		smoothDislocationLine(lineSmoothingLevel, line, segment->isClosedLoop());
-		segment->line = std::move(line);
+	const auto& segmentList = segments();
+	tbb::parallel_for(tbb::blocked_range<size_t>(0, segmentList.size(), 128),
+		[&](const tbb::blocked_range<size_t>& r){
+		for(size_t i = r.begin(); i < r.end(); ++i){
+			DislocationSegment* segment = segmentList[i];
+			if(!segment || segment->coreSize.empty()) continue;
 
-		// coreSize is no longer needed at  render time
-		segment->coreSize.clear();
-	}
+			std::vector<Point3> line;
+			std::vector<int> coreSize;
+			coarsenDislocationLine(
+				linePointInterval,
+				segment->line,
+				segment->coreSize,
+				line,
+				coreSize,
+				segment->isClosedLoop(),
+				segment->isInfiniteLine()
+			);
+			smoothDislocationLine(lineSmoothingLevel, line, segment->isClosedLoop());
+			segment->line = std::move(line);
+
+			// coreSize is no longer needed at render time
+			segment->coreSize.clear();
+		}
+	});
 }
 
 // Reduces the number of points along a segment by averaging over intervals
@@ -87,10 +103,10 @@ void DislocationNetwork::smoothDislocationLines(double lineSmoothingLevel, doubl
 // exceeds a threshold.
 void DislocationNetwork::coarsenDislocationLine(
     double linePointInterval,
-    const std::deque<Point3>& input,
-    const std::deque<int>& coreSize,
-    std::deque<Point3>& output,
-    std::deque<int>& outputCoreSize,
+    const std::vector<Point3>& input,
+    const std::vector<int>& coreSize,
+    std::vector<Point3>& output,
+    std::vector<int>& outputCoreSize,
     bool isClosedLoop,
     bool isInfiniteLine
 ){
@@ -172,7 +188,7 @@ void DislocationNetwork::coarsenDislocationLine(
         outputCoreSize = coreSize;
     }
 }
-void DislocationNetwork::smoothDislocationLine(double smoothingLevel, std::deque<Point3>& line, bool isLoop){
+void DislocationNetwork::smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, bool isLoop){
     // If anti-aliasing is off or the line is too short to anti-alias, do nothing.
 	if(smoothingLevel <= 0 || line.size() <= 2){
 		return;

@@ -4,13 +4,11 @@
 #include <volt/analysis/elastic_mapping.h>
 #include <volt/utilities/concurrence/parallel_system.h>
 #include <tbb/parallel_for.h>
-#include <tbb/concurrent_vector.h>
-#include <tbb/parallel_sort.h>
-#include <omp.h>
 #include <mutex>
-#include <execution>
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
+#include <queue>
 
 namespace Volt{
 
@@ -28,69 +26,129 @@ static constexpr std::array<std::pair<int, int>, 6> tetraEdgeVertices{{
 // lists: one at its source vertex (edges leaving) and one at its destination vertex
 // (edges arriving), so that we can later traverse all edges adjacent to any given vertex.
 void ElasticMapping::generateTessellationEdges(){
-    struct TempEdge {
-        int v1, v2;
-        bool operator<(const TempEdge& other) const {
-            if(v1 != other.v1) return v1 < other.v1;
-            return v2 < other.v2;
-        }
-        bool operator==(const TempEdge& other) const {
-            return v1 == other.v1 && v2 == other.v2;
-        }
-    };
-
-    tbb::concurrent_vector<TempEdge> potentialEdges;
     const auto &simCell = structureAnalysis().context().simCell;
+    _edges.clear();
+    for(auto& heads : _vertexEdges){
+        heads = {-1, -1};
+    }
 
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, tessellation().numberOfTetrahedra()), 
+    std::vector<std::vector<uint64_t>> sortedEdgeChunks;
+    std::mutex chunksMutex;
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, tessellation().numberOfTetrahedra(), 32'768), 
         [&](const tbb::blocked_range<size_t>& r) {
+        std::vector<uint64_t> edgeKeys;
+        edgeKeys.reserve((r.size() * tetraEdgeVertices.size()) / 2);
+
+        std::array<decltype(tessellation().cellVertex(0, 0)), 4> vertices{};
+        std::array<int, 4> vertexIndices{};
+        std::array<Point3, 4> vertexPositions{};
         for(size_t cellIdx = r.begin(); cellIdx != r.end(); ++cellIdx){
             if(tessellation().isGhostCell(cellIdx)) continue;
 
+            for(int localIdx = 0; localIdx < 4; ++localIdx){
+                vertices[localIdx] = tessellation().cellVertex(cellIdx, localIdx);
+                vertexIndices[localIdx] = tessellation().vertexIndex(vertices[localIdx]);
+                vertexPositions[localIdx] = tessellation().vertexPosition(vertices[localIdx]);
+            }
+
             for(auto [vi, vj] : tetraEdgeVertices){
-                int v1 = tessellation().vertexIndex(tessellation().cellVertex(cellIdx, vi));
-                int v2 = tessellation().vertexIndex(tessellation().cellVertex(cellIdx, vj));
+                int v1 = vertexIndices[vi];
+                int v2 = vertexIndices[vj];
 
                 if(v1 == v2) continue;
 
-                Point3 p1 = tessellation().vertexPosition(tessellation().cellVertex(cellIdx, vi));
-                Point3 p2 = tessellation().vertexPosition(tessellation().cellVertex(cellIdx, vj));
-
-                if(simCell.isWrappedVector(p1 - p2)) continue;
+                if(simCell.isWrappedVector(vertexPositions[vi] - vertexPositions[vj])) continue;
 
                 int minV = std::min(v1, v2);
                 int maxV = std::max(v1, v2);
-                potentialEdges.push_back({minV, maxV});
+                // Pack (minV, maxV) into one sortable key.
+                const uint64_t key = (uint64_t{static_cast<uint32_t>(minV)} << 32) |
+                                     uint64_t{static_cast<uint32_t>(maxV)};
+                edgeKeys.push_back(key);
             }
         }
+
+        if(edgeKeys.empty()){
+            return;
+        }
+
+        std::sort(edgeKeys.begin(), edgeKeys.end());
+        edgeKeys.erase(std::unique(edgeKeys.begin(), edgeKeys.end()), edgeKeys.end());
+        if(edgeKeys.empty()){
+            return;
+        }
+
+        std::lock_guard<std::mutex> lock(chunksMutex);
+        sortedEdgeChunks.emplace_back(std::move(edgeKeys));
     });
 
-    if(potentialEdges.empty()) return;
+    if(sortedEdgeChunks.empty()){
+        _edgeCount = 0;
+        return;
+    }
 
-    tbb::parallel_sort(potentialEdges.begin(), potentialEdges.end());
-    
-    // De-duplicate
-    std::vector<TempEdge> uniqueEdges;
-    uniqueEdges.reserve(potentialEdges.size());
-    if(!potentialEdges.empty()){
-        uniqueEdges.push_back(potentialEdges[0]);
-        for(size_t i = 1; i < potentialEdges.size(); ++i){
-            if(!(potentialEdges[i] == uniqueEdges.back())){
-                uniqueEdges.push_back(potentialEdges[i]);
-            }
+    size_t maxUniqueEdges = 0;
+    for(const auto& chunk : sortedEdgeChunks){
+        maxUniqueEdges += chunk.size();
+    }
+    _edges.reserve(maxUniqueEdges);
+
+    struct HeapEntry{
+        uint64_t key;
+        size_t chunkIndex;
+        size_t offset;
+    };
+    auto compareEntries = [](const HeapEntry& a, const HeapEntry& b){
+        return a.key > b.key;
+    };
+    std::priority_queue<
+        HeapEntry,
+        std::vector<HeapEntry>,
+        decltype(compareEntries)
+    > minHeap(compareEntries);
+
+    for(size_t i = 0; i < sortedEdgeChunks.size(); ++i){
+        if(!sortedEdgeChunks[i].empty()){
+            minHeap.push({sortedEdgeChunks[i][0], i, 0});
         }
     }
 
-    _edgeCount = static_cast<int>(uniqueEdges.size());
-    for(const auto& te : uniqueEdges){
-        TessellationEdge* e = _edgePool.construct(te.v1, te.v2);
-        
-        e->nextLeavingEdge = _vertexEdges[te.v1].first;
-        _vertexEdges[te.v1].first = e;
+    _edgeCount = 0;
+    bool hasPreviousKey = false;
+    uint64_t previousKey = 0;
+    while(!minHeap.empty()){
+        HeapEntry entry = minHeap.top();
+        minHeap.pop();
 
-        e->nextArrivingEdge = _vertexEdges[te.v2].second;
-        _vertexEdges[te.v2].second = e;
+        if(!hasPreviousKey || entry.key != previousKey){
+            hasPreviousKey = true;
+            previousKey = entry.key;
+            const int v1 = static_cast<int>(entry.key >> 32);
+            const int v2 = static_cast<int>(entry.key & 0xFFFFFFFFu);
+            const int edgeIndex = static_cast<int>(_edges.size());
+            _edges.emplace_back(v1, v2);
+            auto& edge = _edges.back();
+            edge.nextLeavingEdge = _vertexEdges[v1].first;
+            _vertexEdges[v1].first = edgeIndex;
+
+            edge.nextArrivingEdge = _vertexEdges[v2].second;
+            _vertexEdges[v2].second = edgeIndex;
+            ++_edgeCount;
+        }
+
+        auto& keys = sortedEdgeChunks[entry.chunkIndex];
+        const size_t nextOffset = entry.offset + 1;
+        if(nextOffset < keys.size()){
+            minHeap.push({keys[nextOffset], entry.chunkIndex, nextOffset});
+        }else{
+            std::vector<uint64_t>().swap(keys);
+        }
     }
+
+    std::vector<std::vector<uint64_t>>().swap(sortedEdgeChunks);
+
+    _edges.shrink_to_fit();
 }
 
 // Once we have a graph of edges connecting mesh vertices, we need to assign
@@ -107,35 +165,57 @@ void ElasticMapping::assignVerticesToClusters(){
     const size_t vertex_count = _vertexClusters.size();
     
     // Initial assignment (can be parallel since each vertex is independent)
-    #pragma omp parallel for schedule(static) 
-    for(size_t i = 0; i < vertex_count; ++i){
-        _vertexClusters[i] = structureAnalysis().atomCluster(int(i));
-    }
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, vertex_count),
+        [this](const tbb::blocked_range<size_t>& r){
+            for(size_t i = r.begin(); i < r.end(); ++i){
+                _vertexClusters[i] = structureAnalysis().atomCluster(int(i));
+            }
+        });
 
-    // Propagate cluster assignments sequentially for determinism
+    std::vector<Cluster*> nextClusters(vertex_count, nullptr);
+
     bool changed;
     do{
-        changed = false;
-        for(size_t idx = 0; idx < vertex_count; ++idx){
-            if(clusterOfVertex(idx)->id != 0) continue;
+        std::atomic<bool> anyChanged{false};
+        tbb::parallel_for(
+            tbb::blocked_range<size_t>(0, vertex_count),
+            [&](const tbb::blocked_range<size_t>& r){
+                for(size_t idx = r.begin(); idx < r.end(); ++idx){
+                    Cluster* currentCluster = _vertexClusters[idx];
+                    Cluster* assignedCluster = currentCluster;
+                    if(currentCluster->id == 0){
+                        for(int edgeIdx = _vertexEdges[idx].first; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextLeavingEdge){
+                            auto const* e = &_edges[edgeIdx];
+                            Cluster* neighborCluster = _vertexClusters[e->vertex2];
+                            if(neighborCluster->id != 0){
+                                assignedCluster = neighborCluster;
+                                break;
+                            }
+                        }
 
-            for(auto* e = _vertexEdges[idx].first; e; e = e->nextLeavingEdge){
-                if(clusterOfVertex(e->vertex2)->id != 0){
-                    _vertexClusters[idx] = _vertexClusters[e->vertex2];
-                    changed = true;
-                    break;
+                        if(assignedCluster->id == 0){
+                            for(int edgeIdx = _vertexEdges[idx].second; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextArrivingEdge){
+                                auto const* e = &_edges[edgeIdx];
+                                Cluster* neighborCluster = _vertexClusters[e->vertex1];
+                                if(neighborCluster->id != 0){
+                                    assignedCluster = neighborCluster;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    nextClusters[idx] = assignedCluster;
+                    if(assignedCluster != currentCluster){
+                        anyChanged.store(true, std::memory_order_relaxed);
+                    }
                 }
             }
+        );
 
-            if(clusterOfVertex(idx)->id != 0) continue;
-
-            for(auto* e = _vertexEdges[idx].second; e; e = e->nextArrivingEdge){
-                if(clusterOfVertex(e->vertex1)->id != 0){
-                    _vertexClusters[idx] = _vertexClusters[e->vertex1];
-                    changed = true;
-                    break;
-                }
-            }
+        changed = anyChanged.load(std::memory_order_relaxed);
+        if(changed){
+            _vertexClusters.swap(nextClusters);
         }
     }while(changed);
 }
@@ -153,9 +233,11 @@ void ElasticMapping::assignVerticesToClusters(){
 // verify closed-loops balances.
 void ElasticMapping::assignIdealVectorsToEdges(bool reconstructEdgeVectors, int crystalPathSteps){
     tbb::parallel_for(tbb::blocked_range<size_t>(0, _vertexEdges.size()), [&](const tbb::blocked_range<size_t>& r){
+        (void)reconstructEdgeVectors;
         CrystalPathFinder pathFinder{ structureAnalysis(), crystalPathSteps };
         for(size_t headIdx = r.begin(); headIdx != r.end(); ++headIdx){
-            for(auto* edge = _vertexEdges[headIdx].first; edge; edge = edge->nextLeavingEdge){
+            for(int edgeIdx = _vertexEdges[headIdx].first; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextLeavingEdge){
+                auto* edge = &_edges[edgeIdx];
                 if(edge->hasClusterVector()) { continue; }
 
                 Cluster* c1 = clusterOfVertex(edge->vertex1);
@@ -254,9 +336,9 @@ bool ElasticMapping::isElasticMappingCompatible(DelaunayTessellation::CellHandle
 }
 
 void ElasticMapping::releaseCaches() noexcept{
-    _edgePool.clear();
+    std::vector<TessellationEdge>().swap(_edges);
     _edgeCount = 0;
-    std::vector<std::pair<TessellationEdge*, TessellationEdge*>>().swap(_vertexEdges);
+    std::vector<std::pair<int, int>>().swap(_vertexEdges);
     std::vector<Cluster*>().swap(_vertexClusters);
 }
 

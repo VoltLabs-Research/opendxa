@@ -66,6 +66,12 @@ public:
 
     bool writeJsonMsgpackToFile(const json& data, const std::string& filePath, bool sortKeys = true);
 
+    void writeDislocationsMsgpackToFile(
+        const DislocationNetwork* network,
+        const SimulationCell& simulationCell,
+        const std::string& filePath
+    );
+
     json getDisplacementsData(
         const DisplacementsEngine& engine,
         const std::vector<int>& ids
@@ -102,7 +108,7 @@ public:
 
     void exportCoreAtoms(
         const LammpsParser::Frame& frame,
-        const std::unordered_set<int>& coreAtomIndices,
+        const std::vector<uint8_t>& coreAtomFlags,
         const std::string& outputFilename
     );
 
@@ -162,6 +168,6 @@ private:
 
 // TODO: ?
 json dislocationNetworkToJson(const DislocationNetwork* network);
-json frameToJson(const LammpsParser::Frame& frame);
+json frameToJson(const LammpsParser::Frame& frame, const BurgersLoopBuilder* tracer = nullptr);
 
 } 

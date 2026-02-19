@@ -7,6 +7,10 @@
 #include <volt/analysis/cluster_connector.h>
 #include <volt/utilities/msgpack_writer.h>
 #include <spdlog/spdlog.h>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
+#include <tbb/blocked_range.h>
+#include <string_view>
 
 namespace Volt{
 
@@ -71,9 +75,20 @@ void DislocationAnalysis::setIdentificationMode(StructureAnalysis::Mode identifi
 
 json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::string& outputFile){
     auto start_time = std::chrono::high_resolution_clock::now();
+    auto stage_start = start_time;
     spdlog::debug("Processing frame {} with {} atoms", frame.timestep, frame.natoms);
     
     json result;
+    json stage_metrics = json::array();
+    auto mark_stage = [&](std::string_view name){
+        const auto now = std::chrono::high_resolution_clock::now();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - stage_start).count();
+        stage_metrics.push_back({
+            {"stage", name},
+            {"elapsed_ms", elapsed}
+        });
+        stage_start = now;
+    };
 
     if(frame.natoms <= 0){
         return AnalysisResult::failure("Invalid number of atoms: " + std::to_string(frame.natoms));
@@ -86,11 +101,12 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
     std::shared_ptr<ParticleProperty> positions;
     {
         PROFILE("Create Position Property");
-        positions = FrameAdapter::createPositionProperty(frame);
+        positions = FrameAdapter::createPositionPropertyShared(frame);
         if(!positions){
             return AnalysisResult::failure("Failed to create position property");
         }
     }
+    mark_stage("create_position_property");
 
     if(!FrameAdapter::validateSimulationCell(frame.simulationCell)){
         return AnalysisResult::failure("Invalid simulation cell");
@@ -120,18 +136,25 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             _rmsd
         );
     }
+    mark_stage("structure_analysis_setup");
     
     {
         PROFILE("Identify Structures");
         structureAnalysis->identifyStructures();
     }
+    mark_stage("identify_structures");
 
     std::vector<int> extractedStructureTypes;
-    extractedStructureTypes.reserve(frame.natoms);
-    for(int i = 0; i < frame.natoms; ++i){
-        int structureType = structureAnalysis->context().structureTypes->getInt(i);
-        extractedStructureTypes.push_back(structureType);
+    if(outputFile.empty()){
+        extractedStructureTypes.resize(frame.natoms);
+        tbb::parallel_for(tbb::blocked_range<int>(0, frame.natoms),
+            [&](const tbb::blocked_range<int>& r){
+                for(int i = r.begin(); i < r.end(); ++i){
+                    extractedStructureTypes[i] = structureAnalysis->context().structureTypes->getInt(i);
+                }
+            });
     }
+    mark_stage("extract_structure_types");
 
     // If identification mode is PTM, export PTM data
     if(!outputFile.empty() && _identificationMode == StructureAnalysis::Mode::PTM){
@@ -140,13 +163,16 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             frame.ids,
             outputFile
         );
+        mark_stage("export_ptm");
     }
 
     // If structure identification only is requested
     if(_structureIdentificationOnly && !outputFile.empty()){
         _jsonExporter.exportForStructureIdentification(frame, *structureAnalysis, outputFile);
+        mark_stage("structure_identification_only_export");
 
         result["is_failed"] = false;
+        result["stage_metrics"] = std::move(stage_metrics);
         
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
@@ -162,16 +188,19 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         PROFILE("Build Clusters");
         clusterConnector.buildClusters();
     }
+    mark_stage("build_clusters");
 
     {
         PROFILE("Connect Clusters");
         clusterConnector.connectClusters();
     }
+    mark_stage("connect_clusters");
 
     {
         PROFILE("Form Super Clusters");
         clusterConnector.formSuperClusters();
     }
+    mark_stage("form_super_clusters");
 
     DelaunayTessellation tessellation;
     double ghostLayerSize;
@@ -187,22 +216,28 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             nullptr
         );
     }
+    mark_stage("delaunay_tessellation");
 
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
     {
         PROFILE("Elastic Mapping - Generate Edges");
         elasticMap.generateTessellationEdges();
     }
+    mark_stage("elastic_generate_edges");
 
     {
         PROFILE("Elastic Mapping - Assign Vertices");
         elasticMap.assignVerticesToClusters();
     }
+    mark_stage("elastic_assign_vertices");
 
     {
         PROFILE("Elastic Mapping - Assign Ideal Vectors");
         elasticMap.assignIdealVectorsToEdges(false, 4);
     }
+    mark_stage("elastic_assign_ideal_vectors");
+
+    elasticMap.shrinkVertexStorage();
     
     structureAnalysis->freeNeighborLists();
 
@@ -211,49 +246,71 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         PROFILE("InterfaceMesh - Create Mesh");
         interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance());
     }
+    mark_stage("interface_mesh_create");
+
+    elasticMap.releaseCaches();
+    tessellation.releaseMemory();
 
     BurgersLoopBuilder tracer(
         interfaceMesh, 
         &structureAnalysis->clusterGraph(),
-        _maxTrialCircuitSize, 
-        _circuitStretchability,
+        static_cast<int>(_maxTrialCircuitSize), 
+        static_cast<int>(_circuitStretchability),
         _markCoreAtoms
     );
     
     {
         PROFILE("Burgers Loop Builder - Trace Dislocation Segments");
-        spdlog::set_level(spdlog::level::trace);
         tracer.traceDislocationSegments();
-        spdlog::set_level(spdlog::level::debug);
     }
+    mark_stage("trace_dislocation_segments");
 
     {
         PROFILE("Burgers Loop Builder - Finish Dislocation Segments");
         tracer.finishDislocationSegments(_inputCrystalStructure);
     }
+    mark_stage("finish_dislocation_segments");
 
-    auto networkUptr = std::make_unique<DislocationNetwork>(tracer.network());
-    spdlog::debug("Found {} dislocation segments", networkUptr->segments().size());
+    if(!outputFile.empty()){
+        PROFILE("Streaming Defect Mesh MsgPack");
+        _jsonExporter.writeDefectMeshMsgpackToFile(
+            interfaceMesh,
+            tracer,
+            interfaceMesh.structureAnalysis(),
+            true,
+            outputFile + "_defect_mesh.msgpack"
+        );
+        mark_stage("stream_defect_mesh_msgpack");
+    }
+
+    DislocationNetwork& network = tracer.network();
+    spdlog::debug("Found {} dislocation segments", network.segments().size());
 
     HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex> defectMesh;
-    interfaceMesh.generateDefectMesh(tracer, defectMesh);
 
     {
         PROFILE("Post Processing - Smooth Vertices & Smooth Dislocation Lines");
-        networkUptr->smoothDislocationLines(_lineSmoothingLevel, _linePointInterval);
-        spdlog::debug("Defect mesh facets: {} ", defectMesh.faces().size());
+        network.smoothDislocationLines(_lineSmoothingLevel, _linePointInterval);
     }
+    mark_stage("smooth_dislocation_lines");
 
     double totalLineLength = 0.0;
-    const auto& segments = networkUptr->segments();
+    const auto& segments = network.segments();
     
-    #pragma omp parallel for reduction(+:totalLineLength) schedule(dynamic)
-    for(int i = 0; i < segments.size(); ++i){
-        DislocationSegment* segment = segments[i];
-        if(segment && !segment->isDegenerate()){
-            totalLineLength += segment->calculateLength();
-        }
-    }
+    totalLineLength = tbb::parallel_reduce(
+        tbb::blocked_range<size_t>(0, segments.size()),
+        0.0,
+        [&segments](const tbb::blocked_range<size_t>& r, double sum) -> double {
+            for(size_t i = r.begin(); i < r.end(); ++i){
+                DislocationSegment* segment = segments[i];
+                if(segment && !segment->isDegenerate()){
+                    sum += segment->calculateLength();
+                }
+            }
+            return sum;
+        },
+        std::plus<double>()
+    );
 
     spdlog::debug("Total line length: {} ", totalLineLength);
 
@@ -261,20 +318,22 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         try{
             PROFILE("JSON Exporter - Export Analysis Data");
             result = _jsonExporter.exportAnalysisData(
-                networkUptr.get(),
+                &network,
                 defectMesh,
                 &interfaceMesh,
                 frame,
                 &tracer,
-                &extractedStructureTypes,
+                outputFile.empty() ? &extractedStructureTypes : nullptr,
                 true,
                 true,
                 false,
-                true
+                outputFile.empty()
             );
+            mark_stage("export_analysis_data");
         }catch(const std::exception& e){
             result["is_failed"] = true;
             result["error"] = e.what();
+            result["stage_metrics"] = std::move(stage_metrics);
             return result;
         }
     }
@@ -285,40 +344,46 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
 
     if(!outputFile.empty()){
         {
-            PROFILE("Streaming Defect Mesh MsgPack");
-            auto meshData = _jsonExporter.getMeshData(defectMesh, interfaceMesh.structureAnalysis(), true, &interfaceMesh);
-            _jsonExporter.writeJsonMsgpackToFile(meshData, outputFile + "_defect_mesh.msgpack");
-        }
-
-        {
             PROFILE("Streaming Atoms MsgPack");
             _jsonExporter.exportForStructureIdentification(frame, interfaceMesh.structureAnalysis(), outputFile);
         }
+        mark_stage("stream_atoms_msgpack");
         {
             PROFILE("Streaming Dislocations MsgPack");
-            auto dislocationsData = _jsonExporter.exportDislocationsToJson(networkUptr.get(), true, &frame.simulationCell);
-            _jsonExporter.writeJsonMsgpackToFile(dislocationsData, outputFile + "_dislocations.msgpack");
+            _jsonExporter.writeDislocationsMsgpackToFile(
+                &network,
+                frame.simulationCell,
+                outputFile + "_dislocations.msgpack"
+            );
         }
+        mark_stage("stream_dislocations_msgpack");
 
         {
             PROFILE("Streaming Interface Mesh MsgPack");
-            auto meshData = _jsonExporter.getMeshData(interfaceMesh, interfaceMesh.structureAnalysis(), true, &interfaceMesh);
-            _jsonExporter.writeJsonMsgpackToFile(meshData, outputFile + "_interface_mesh.msgpack");
+            _jsonExporter.writeMeshMsgpackToFile(
+                interfaceMesh,
+                interfaceMesh.structureAnalysis(),
+                true,
+                &interfaceMesh,
+                outputFile + "_interface_mesh.msgpack"
+            );
         }
+        mark_stage("stream_interface_mesh_msgpack");
         
         {
             PROFILE("Streaming Simulation Cell MsgPack");
             auto simCellInfo = _jsonExporter.getExtendedSimulationCellInfo(frame.simulationCell);
             _jsonExporter.writeJsonMsgpackToFile(simCellInfo, outputFile + "_simulation_cell.msgpack");
         }
+        mark_stage("stream_simulation_cell_msgpack");
 
         if(_markCoreAtoms){
             PROFILE("Streaming Core Atoms MsgPack");
-            _jsonExporter.exportCoreAtoms(frame, tracer._coreAtomIndices, outputFile + "_core_atoms.msgpack");
+            _jsonExporter.exportCoreAtoms(frame, tracer._coreAtomFlags, outputFile + "_core_atoms.msgpack");
+            mark_stage("stream_core_atoms_msgpack");
         }
     }
     
-    networkUptr.reset();
     structureAnalysis.reset();
     structureTypes.reset();
     positions.reset();
@@ -326,6 +391,7 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
     result["total_time"] = duration;
+    result["stage_metrics"] = std::move(stage_metrics);
 
     spdlog::debug("Total time {} ms ", duration);
 

@@ -1,9 +1,11 @@
 #include <volt/core/volt.h>
 #include <volt/geometry/delaunay_tessellation.h>
-#include <omp.h>
 
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_real.hpp>
+#include <tbb/parallel_for.h>
+#include <tbb/blocked_range.h>
+#include <numeric>
 
 namespace Volt{
 
@@ -44,6 +46,8 @@ void DelaunayTessellation::generateTessellation(
 	// and store it in _pointData / _particleIndices
 	_particleIndices.clear();
 	_pointData.clear();
+	_particleIndices.reserve(numPoints);
+	_pointData.reserve(numPoints);
 
 	for(size_t i = 0; i < numPoints; i++, ++positions){
 		// Skip points which are not inclued
@@ -88,33 +92,88 @@ void DelaunayTessellation::generateTessellation(
 		}
 	}
 
-	// Create ghost images of input vertices
+	// Create periodic shifts in deterministic order (ix, iy, iz) excluding the origin shift.
+	std::vector<Vector3I> ghostShifts;
+	ghostShifts.reserve(static_cast<size_t>(
+		(2 * stencilCount[0] + 1) * (2 * stencilCount[1] + 1) * (2 * stencilCount[2] + 1) - 1
+	));
 	for(int ix = -stencilCount[0]; ix <= +stencilCount[0]; ix++){
 		for(int iy = -stencilCount[1]; iy <= +stencilCount[1]; iy++){
 			for(int iz = -stencilCount[2]; iz <= +stencilCount[2]; iz++){
 				if(ix == 0 && iy == 0 && iz == 0) continue;
-
-					Vector3 shift = simCell.reducedToAbsolute(Vector3(ix, iy, iz));
-				for(size_t vertexIndex = 0; vertexIndex < _primaryVertexCount; vertexIndex++){
-					Point3 pimage = _pointData[vertexIndex] + shift;
-					bool isClipped = false;
-					for(size_t dim = 0; dim < 3; dim++){
-						if(simCell.hasPbc(dim)){
-						double d = cellNormals[dim].dot(pimage - Point3::Origin());
-							if(d < cuts[dim][0] || d > cuts[dim][1]){
-								isClipped = true;
-								break;
-							}
-						}
-					}
-					if(!isClipped){
-						_pointData.push_back(pimage);
-						_particleIndices.push_back(_particleIndices[vertexIndex]);
-					}
-				}
+				ghostShifts.emplace_back(ix, iy, iz);
 			}
 		}
 	}
+
+	std::vector<size_t> ghostCounts(ghostShifts.size(), 0);
+	tbb::parallel_for(tbb::blocked_range<size_t>(0, ghostShifts.size(), 8),
+		[&](const tbb::blocked_range<size_t>& r){
+		for(size_t shiftIdx = r.begin(); shiftIdx < r.end(); ++shiftIdx){
+			const auto& imageShift = ghostShifts[shiftIdx];
+			Vector3 shift = simCell.reducedToAbsolute(Vector3(imageShift.x(), imageShift.y(), imageShift.z()));
+			size_t count = 0;
+			for(size_t vertexIndex = 0; vertexIndex < _primaryVertexCount; ++vertexIndex){
+				Point3 pimage = _pointData[vertexIndex] + shift;
+				bool isClipped = false;
+				for(size_t dim = 0; dim < 3; ++dim){
+					if(simCell.hasPbc(dim)){
+						double d = cellNormals[dim].dot(pimage - Point3::Origin());
+						if(d < cuts[dim][0] || d > cuts[dim][1]){
+							isClipped = true;
+							break;
+						}
+					}
+				}
+				if(!isClipped){
+					++count;
+				}
+			}
+			ghostCounts[shiftIdx] = count;
+		}
+	});
+
+	std::vector<size_t> ghostOffsets(ghostCounts.size(), 0);
+	size_t totalGhostPoints = 0;
+	for(size_t i = 0; i < ghostCounts.size(); ++i){
+		ghostOffsets[i] = totalGhostPoints;
+		totalGhostPoints += ghostCounts[i];
+	}
+
+	const size_t basePointCount = _pointData.size();
+	_pointData.resize(basePointCount + totalGhostPoints);
+	_particleIndices.resize(basePointCount + totalGhostPoints);
+
+	tbb::parallel_for(tbb::blocked_range<size_t>(0, ghostShifts.size(), 8),
+		[&](const tbb::blocked_range<size_t>& r){
+		for(size_t shiftIdx = r.begin(); shiftIdx < r.end(); ++shiftIdx){
+			const auto& imageShift = ghostShifts[shiftIdx];
+			Vector3 shift = simCell.reducedToAbsolute(Vector3(imageShift.x(), imageShift.y(), imageShift.z()));
+			size_t writeIndex = basePointCount + ghostOffsets[shiftIdx];
+			for(size_t vertexIndex = 0; vertexIndex < _primaryVertexCount; ++vertexIndex){
+				Point3 pimage = _pointData[vertexIndex] + shift;
+				bool isClipped = false;
+				for(size_t dim = 0; dim < 3; ++dim){
+					if(simCell.hasPbc(dim)){
+						double d = cellNormals[dim].dot(pimage - Point3::Origin());
+						if(d < cuts[dim][0] || d > cuts[dim][1]){
+							isClipped = true;
+							break;
+						}
+					}
+				}
+				if(!isClipped){
+					_pointData[writeIndex] = pimage;
+					_particleIndices[writeIndex] = _particleIndices[vertexIndex];
+					++writeIndex;
+				}
+			}
+		}
+	});
+
+	std::vector<Vector3I>().swap(ghostShifts);
+	std::vector<size_t>().swap(ghostCounts);
+	std::vector<size_t>().swap(ghostOffsets);
 
 	// In order to cover the simulation box completely with finite tetrahedra, add 8 extra
 	// input points to the Delaunay tesselation, far away from the simulation cell and real praticles.
@@ -153,6 +212,7 @@ void DelaunayTessellation::generateTessellation(
 			_cellInfo[cell].index = _numPrimaryTetrahedra++;
 		}
 	}
+
 }
 
 // Determines whether a given tetrahedron cell should be treated as

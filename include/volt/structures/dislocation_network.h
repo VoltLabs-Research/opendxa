@@ -8,7 +8,6 @@
 #include <tbb/spin_mutex.h>
 #include <memory>
 #include <vector>
-#include <deque>
 #include <algorithm>
 #include <ranges>
 #include <cmath>
@@ -73,8 +72,8 @@ struct DislocationNode{
 
 struct DislocationSegment{
 	int id;
-	std::deque<Point3> line;
-	std::deque<int> coreSize;
+	std::vector<Point3> line;
+	std::vector<int> coreSize;
 	ClusterVector burgersVector;
 	DislocationNode* nodes[2];
 	DislocationSegment* replacedWith;
@@ -169,14 +168,14 @@ public:
 		return _segments;
 	}
 
-	void smoothDislocationLine(double smoothingLevel, std::deque<Point3>& line, bool isLoop);
+	void smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, bool isLoop);
 	void smoothDislocationLines(double lineSmoothingLevel, double linePointInterval);
 	void coarsenDislocationLine(
 		double linePointInterval,
-		const std::deque<Point3>& input,
-		const std::deque<int>& coreSize,
-		std::deque<Point3>& output,
-		std::deque<int>& outputCoreSize,
+		const std::vector<Point3>& input,
+		const std::vector<int>& coreSize,
+		std::vector<Point3>& output,
+		std::vector<int>& outputCoreSize,
 		bool isClosedLoop,
 		bool isInfiniteLine
 	);

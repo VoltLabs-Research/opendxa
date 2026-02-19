@@ -8,9 +8,7 @@
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
-#include <tbb/concurrent_unordered_map.h>
 #include <tbb/concurrent_vector.h>
-#include <tbb/mutex.h>
 #include <atomic>
 
 #include <boost/functional/hash.hpp>
@@ -18,6 +16,7 @@
 #include <unordered_map>
 #include <array>
 #include <vector>
+#include <cstdint>
 #include <algorithm>
 
 namespace Volt{
@@ -74,48 +73,51 @@ private:
 			cells.push_back(cell);
 		}
 
-        // Process cells sequentially for deterministic classification order
+		std::vector<uint8_t> isFilled(cells.size(), 0);
+		tbb::parallel_for(tbb::blocked_range<size_t>(0, cells.size(), 512),
+			[&](const tbb::blocked_range<size_t>& r){
+			for(size_t i = r.begin(); i < r.end(); ++i){
+				auto cell = cells[i];
+				bool filled = false;
+				if(_tessellation.isValidCell(cell)){
+					if(auto res = _tessellation.alphaTest(cell, _alpha)){
+						filled = *res;
+					}else{
+						// sliver test
+						int f = 0;
+						for(; f < 4; ++f){
+							auto nbr = _tessellation.mirrorFacet(cell, f).first;
+							if(!_tessellation.isValidCell(nbr)) break;
+							auto nr = _tessellation.alphaTest(nbr, _alpha);
+							if(nr.has_value() && !nr.value()) break;
+						}
+						if(f == 4) filled = true;
+					}
+				}
+				isFilled[i] = filled ? 1 : 0;
+			}
+		});
+
+		// Commit remains sequential to preserve deterministic region assignment and indexing.
 		for(size_t i = 0; i < cells.size(); ++i){
-            auto cell = cells[i];
-            
-            bool isFilled = false;
-            if(_tessellation.isValidCell(cell)){
-                if (auto res = _tessellation.alphaTest(cell, _alpha)){
-                    isFilled = *res;
-                }else{
-                    // sliver test
-                    int f = 0;
-                    for(; f < 4; ++f){
-                        auto nbr = _tessellation.mirrorFacet(cell, f).first;
-                        if(!_tessellation.isValidCell(nbr)) break;
-                        auto nr = _tessellation.alphaTest(nbr, _alpha);
-                        if(nr.has_value() && !nr.value()) break;
-                    }
-                    if (f == 4) isFilled = true;
-                }
-            }
+			auto cell = cells[i];
+			const int region = isFilled[i] ? determineCellRegion(cell) : 0;
+			_tessellation.setUserField(cell, region);
 
-            if(!isFilled){
-                _tessellation.setUserField(cell, 0);
-            }else{
-                _tessellation.setUserField(cell, determineCellRegion(cell));
-            }
+			if(!_tessellation.isGhostCell(cell)){
+				if(_spaceFillingRegion == -2){
+					_spaceFillingRegion = region;
+				}else if(_spaceFillingRegion != region){
+					_spaceFillingRegion = -1;
+				}
+			}
 
-            if(!_tessellation.isGhostCell(cell)){
-                int reg = _tessellation.getUserField(cell);
-                if(_spaceFillingRegion == -2){
-                    _spaceFillingRegion = reg;
-                }else if(_spaceFillingRegion != reg){
-                    _spaceFillingRegion = -1;
-                }
-            }
-
-            if(_tessellation.getUserField(cell) != 0 && !_tessellation.isGhostCell(cell)){
-                _numSolidCells++;
-            }else{
-                _tessellation.setCellIndex(cell, -1);
-            }
-        }
+			if(region != 0 && !_tessellation.isGhostCell(cell)){
+				_numSolidCells++;
+			}else{
+				_tessellation.setCellIndex(cell, -1);
+			}
+		}
 		
 		int cellIndex = 0;
 		for(auto cell : cells){
@@ -133,47 +135,99 @@ private:
 
 	template<typename PrepareMeshFaceFunc>
 	bool createInterfaceFacets(PrepareMeshFaceFunc&& prepareMeshFaceFunc){
-		std::vector<typename HalfEdgeStructureType::Vertex*> vertexMap(_positions->size(), nullptr);
+		std::vector<int> vertexMapIndices(_positions->size(), -1);
 
 		_tetrahedraFaceList.clear();
         _tetrahedraFaceList.resize(_numSolidCells, { nullptr, nullptr, nullptr, nullptr });
 		_faceLookupMap.clear();
 
-        // Process cells sequentially for deterministic face creation order
-        for(size_t cellIdx = 0; cellIdx < _tessellation.numberOfTetrahedra(); ++cellIdx){
-            auto cell = static_cast<DelaunayTessellation::CellHandle>(cellIdx);
-            int internalIdx = _tessellation.getCellIndex(cell);
-            if(internalIdx == -1) continue;
-            int solidRegion = _tessellation.getUserField(cell);
-            
-            for(int f = 0; f < 4; f++){
-                auto mirrorFacet = _tessellation.mirrorFacet(cell, f);
-                auto adjacentCell = mirrorFacet.first;
-                if(_tessellation.getUserField(adjacentCell) == solidRegion) continue;
+		struct FacetCandidate {
+			bool valid = false;
+			DelaunayTessellation::CellHandle cell = 0;
+			std::array<DelaunayTessellation::VertexHandle, 3> vertexHandles{};
+			std::array<int, 3> vertexIndices{};
+		};
 
-                std::array<typename HalfEdgeStructureType::Vertex*,3> facetVertices;
-                std::array<DelaunayTessellation::VertexHandle,3> vertexHandles;
-                std::array<int,3> vertexIndices;
-                for(int v = 0; v < 3; v++){
-                    vertexHandles[v] = _tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(f, FlipOrientation ? (2-v) : v));
-                    int idx = vertexIndices[v] = _tessellation.vertexIndex(vertexHandles[v]);
-                    
-                    if(vertexMap[idx] == nullptr){
-                        vertexMap[idx] = _mesh.createVertex(_positions->getPoint3(idx));
-                    }
-                    facetVertices[v] = vertexMap[idx];
-                }
+		struct ActiveCell {
+			DelaunayTessellation::CellHandle cell = 0;
+			int internalIdx = -1;
+		};
 
-                auto* face = _mesh.createFace(facetVertices.begin(), facetVertices.end());
-                if constexpr(!std::is_same_v<PrepareMeshFaceFunc, std::nullptr_t>){
-                    prepareMeshFaceFunc(face, vertexIndices, vertexHandles, cell);
-                }
+		const size_t totalCells = _tessellation.numberOfTetrahedra();
+		constexpr size_t cellChunkSize = 4096;
+		for(size_t chunkBegin = 0; chunkBegin < totalCells; chunkBegin += cellChunkSize){
+			const size_t chunkEnd = std::min(totalCells, chunkBegin + cellChunkSize);
+			std::vector<ActiveCell> activeCells;
+			activeCells.reserve(chunkEnd - chunkBegin);
+			for(size_t cellIdx = chunkBegin; cellIdx < chunkEnd; ++cellIdx){
+				auto cell = static_cast<DelaunayTessellation::CellHandle>(cellIdx);
+				int internalIdx = _tessellation.getCellIndex(cell);
+				if(internalIdx == -1) continue;
+				activeCells.push_back({cell, internalIdx});
+			}
+			if(activeCells.empty()){
+				continue;
+			}
 
-                reorderFaceVertices(vertexIndices);
-                _faceLookupMap.insert({vertexIndices, face});
-                _tetrahedraFaceList[internalIdx][f] = face;
-            }
-        }
+			std::vector<std::array<FacetCandidate, 4>> stagedFacets(activeCells.size());
+			tbb::parallel_for(
+				tbb::blocked_range<size_t>(0, activeCells.size(), 256),
+				[&](const tbb::blocked_range<size_t>& r){
+				for(size_t localIdx = r.begin(); localIdx < r.end(); ++localIdx){
+					const auto& active = activeCells[localIdx];
+					auto cell = active.cell;
+					int solidRegion = _tessellation.getUserField(cell);
+					auto& cellFacets = stagedFacets[localIdx];
+
+					for(int f = 0; f < 4; ++f){
+						auto mirrorFacet = _tessellation.mirrorFacet(cell, f);
+						auto adjacentCell = mirrorFacet.first;
+						if(_tessellation.getUserField(adjacentCell) == solidRegion) continue;
+
+						FacetCandidate candidate;
+						candidate.valid = true;
+						candidate.cell = cell;
+						for(int v = 0; v < 3; ++v){
+							candidate.vertexHandles[v] = _tessellation.cellVertex(
+								cell,
+								DelaunayTessellation::cellFacetVertexIndex(f, FlipOrientation ? (2 - v) : v)
+							);
+							candidate.vertexIndices[v] = _tessellation.vertexIndex(candidate.vertexHandles[v]);
+						}
+						cellFacets[static_cast<size_t>(f)] = candidate;
+					}
+				}
+			});
+
+			// Commit staged facets sequentially to preserve deterministic mesh/index ordering.
+			for(size_t localIdx = 0; localIdx < activeCells.size(); ++localIdx){
+				const int internalIdx = activeCells[localIdx].internalIdx;
+				auto& cellFacets = stagedFacets[localIdx];
+				for(int f = 0; f < 4; ++f){
+					const auto& candidate = cellFacets[static_cast<size_t>(f)];
+					if(!candidate.valid) continue;
+
+					std::array<typename HalfEdgeStructureType::Vertex*, 3> facetVertices{};
+					for(int v = 0; v < 3; ++v){
+						const int idx = candidate.vertexIndices[v];
+						if(vertexMapIndices[idx] < 0){
+							vertexMapIndices[idx] = _mesh.createVertex(_positions->getPoint3(idx))->index();
+						}
+						facetVertices[v] = _mesh.vertex(vertexMapIndices[idx]);
+					}
+
+					auto* face = _mesh.createFace(facetVertices.begin(), facetVertices.end());
+					if constexpr(!std::is_same_v<PrepareMeshFaceFunc, std::nullptr_t>){
+						prepareMeshFaceFunc(face, candidate.vertexIndices, candidate.vertexHandles, candidate.cell);
+					}
+
+					auto orderedIndices = candidate.vertexIndices;
+					reorderFaceVertices(orderedIndices);
+					_faceLookupMap.insert({orderedIndices, face});
+					_tetrahedraFaceList[static_cast<size_t>(internalIdx)][static_cast<size_t>(f)] = face;
+				}
+			}
+		}
 
 		return true;
 	}
@@ -275,8 +329,7 @@ private:
 	ParticleProperty* _positions;
 	HalfEdgeStructureType& _mesh;
 	std::vector<std::array<typename HalfEdgeStructureType::Face*, 4>> _tetrahedraFaceList;
-    tbb::concurrent_unordered_map<std::array<int,3>, typename HalfEdgeStructureType::Face*, boost::hash<std::array<int, 3>>> _faceLookupMap;
-    tbb::spin_mutex _mutex;
+    std::unordered_map<std::array<int,3>, typename HalfEdgeStructureType::Face*, boost::hash<std::array<int, 3>>> _faceLookupMap;
 };
 
 }

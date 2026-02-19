@@ -9,11 +9,15 @@
 #include <algorithm>
 #include <cmath>
 #include <array>
+#include <cstdint>
 #include <thread>
 #include <future>
 #include <mutex>
 #include <volt/utilities/msgpack_writer.h>
 #include <volt/elastic_strain_engine.h>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
+#include <tbb/blocked_range.h>
 
 namespace Volt {
 
@@ -143,9 +147,57 @@ struct ExportMeshData {
     std::vector<std::array<int, 3>> faces;
 };
 
+int comparePointLexicographic(const Point3& a, const Point3& b){
+    if(a.x() < b.x()) return -1;
+    if(a.x() > b.x()) return 1;
+    if(a.y() < b.y()) return -1;
+    if(a.y() > b.y()) return 1;
+    if(a.z() < b.z()) return -1;
+    if(a.z() > b.z()) return 1;
+    return 0;
+}
+
+bool dislocationSegmentLess(const DislocationSegment* lhs, const DislocationSegment* rhs){
+    const Vector3 lhsB = lhs->burgersVector.localVec();
+    const Vector3 rhsB = rhs->burgersVector.localVec();
+    if(lhsB.x() < rhsB.x()) return true;
+    if(lhsB.x() > rhsB.x()) return false;
+    if(lhsB.y() < rhsB.y()) return true;
+    if(lhsB.y() > rhsB.y()) return false;
+    if(lhsB.z() < rhsB.z()) return true;
+    if(lhsB.z() > rhsB.z()) return false;
+
+    if(lhs->line.size() != rhs->line.size()){
+        return lhs->line.size() < rhs->line.size();
+    }
+
+    for(size_t i = 0; i < lhs->line.size(); ++i){
+        const int cmp = comparePointLexicographic(lhs->line[i], rhs->line[i]);
+        if(cmp < 0) return true;
+        if(cmp > 0) return false;
+    }
+
+    const double lhsLength = lhs->calculateLength();
+    const double rhsLength = rhs->calculateLength();
+    return lhsLength < rhsLength;
+}
+
+std::vector<const DislocationSegment*> buildDeterministicSegments(const DislocationNetwork* network){
+    std::vector<const DislocationSegment*> orderedSegments;
+    const auto& segments = network->segments();
+    orderedSegments.reserve(segments.size());
+    for(const auto* segment : segments){
+        if(segment && !segment->isDegenerate()){
+            orderedSegments.push_back(segment);
+        }
+    }
+    std::sort(orderedSegments.begin(), orderedSegments.end(), dislocationSegmentLess);
+    return orderedSegments;
+}
+
 ExportMeshData buildExportMeshData(const MeshArrays& arrays, const SimulationCell& cell){
     ExportMeshData exportData;
-    exportData.points.reserve(arrays.vertices.size());
+    exportData.points.reserve(arrays.vertices.size() + arrays.faces.size());
     for(const auto& pos : arrays.vertices){
         exportData.points.push_back(pos);
     }
@@ -218,7 +270,9 @@ json DXAJsonExporter::exportAnalysisData(
         data["dislocations"] = exportDislocationsToJson(network, includeDetailedNetworkInfo, &frame.simulationCell);
     }
 
-   
+    if(includeAtomsInMemory){
+        data["atoms"] = getAtomsData(frame, tracer, structureTypes);
+    }
     //data["cluster_graph"] = exportClusterGraphToJson(&network->clusterGraph());
     data["simulation_cell"] = getExtendedSimulationCellInfo(frame.simulationCell);
     data["structures"] = interfaceMesh->structureAnalysis().getStructureStatisticsJson();
@@ -245,7 +299,7 @@ json DXAJsonExporter::exportAnalysisData(
 }
 
 void clipDislocationLine(
-    const std::deque<Point3>& line,
+    const std::vector<Point3>& line,
     const SimulationCell& simulationCell,
     const std::function<void(const Point3&, const Point3&, bool)>& segmentCallback
 ){
@@ -330,12 +384,13 @@ json DXAJsonExporter::exportDislocationsToJson(
     bool includeDetailedInfo, 
     const SimulationCell* simulationCell
 ){
-      json dislocations;
-    const auto& segments = network->segments();
+    (void)includeDetailedInfo;
+    json dislocations;
+    std::vector<const DislocationSegment*> orderedSegments = buildDeterministicSegments(network);
     
     dislocations["metadata"] = {
         {"type", "dislocation_segments"},
-        {"count", static_cast<int>(segments.size())}
+        {"count", static_cast<int>(orderedSegments.size())}
     };
     
     json dataArray = json::array();
@@ -344,7 +399,7 @@ json DXAJsonExporter::exportDislocationsToJson(
     double maxLength = 0.0;
     double minLength = std::numeric_limits<double>::max();
 
-    auto saveChunk = [&](const std::deque<Point3>& chunk, const DislocationSegment* originalSegment, int originalIndex){
+    auto saveChunk = [&](const std::vector<Point3>& chunk, const DislocationSegment* originalSegment, int originalIndex){
         // if(chunk.size() < 2) return;
         json segmentJson;
         json points = json::array();
@@ -377,14 +432,14 @@ json DXAJsonExporter::exportDislocationsToJson(
         minLength = std::min(minLength, chunkLength);
     };
 
-    for(size_t i = 0; i < segments.size(); ++i){
-        auto* segment = segments[i];
-        if(segment && !segment->isDegenerate()){
-            std::deque<Point3> currentChunk;
+    for(size_t segmentId = 0; segmentId < orderedSegments.size(); ++segmentId){
+        const auto* segment = orderedSegments[segmentId];
+        if(simulationCell){
+            std::vector<Point3> currentChunk;
             clipDislocationLine(segment->line, *simulationCell, 
                 [&](const Point3& p1, const Point3& p2, bool isInitialSegment){
                     if(isInitialSegment && !currentChunk.empty()){
-                        saveChunk(currentChunk, segment, i);
+                        saveChunk(currentChunk, segment, static_cast<int>(segmentId));
                         currentChunk.clear();
                     }
 
@@ -396,7 +451,13 @@ json DXAJsonExporter::exportDislocationsToJson(
             });
 
             if(!currentChunk.empty()){
-                saveChunk(currentChunk, segment, i);
+                saveChunk(currentChunk, segment, static_cast<int>(segmentId));
+            }
+        }else{
+            // No simulation cell: emit raw line points without clipping
+            std::vector<Point3> rawChunk(segment->line.begin(), segment->line.end());
+            if(!rawChunk.empty()){
+                saveChunk(rawChunk, segment, static_cast<int>(segmentId));
             }
         }
     }
@@ -417,6 +478,167 @@ json DXAJsonExporter::exportDislocationsToJson(
     };
     
     return dislocations;
+}
+
+void DXAJsonExporter::writeDislocationsMsgpackToFile(
+    const DislocationNetwork* network,
+    const SimulationCell& simulationCell,
+    const std::string& filePath
+){
+    if(network == nullptr){
+        return;
+    }
+
+    std::vector<const DislocationSegment*> orderedSegments = buildDeterministicSegments(network);
+
+    std::size_t chunkCount = 0;
+    double totalLength = 0.0;
+    int64_t totalPoints = 0;
+    double maxLength = 0.0;
+    double minLength = std::numeric_limits<double>::max();
+
+    for(const auto* segment : orderedSegments){
+        bool chunkActive = false;
+        Point3 previousPoint;
+        std::size_t chunkPoints = 0;
+        double chunkLength = 0.0;
+
+        auto finishChunk = [&](){
+            if(!chunkActive){
+                return;
+            }
+            chunkCount++;
+            totalLength += chunkLength;
+            totalPoints += static_cast<int64_t>(chunkPoints);
+            maxLength = std::max(maxLength, chunkLength);
+            minLength = std::min(minLength, chunkLength);
+            chunkActive = false;
+            chunkPoints = 0;
+            chunkLength = 0.0;
+        };
+
+        clipDislocationLine(
+            segment->line,
+            simulationCell,
+            [&](const Point3& p1, const Point3& p2, bool isInitialSegment){
+                if(isInitialSegment && chunkActive){
+                    finishChunk();
+                }
+
+                if(!chunkActive){
+                    chunkActive = true;
+                    previousPoint = p1;
+                    chunkPoints = 1;
+                }
+
+                chunkLength += (p2 - previousPoint).length();
+                previousPoint = p2;
+                chunkPoints++;
+            }
+        );
+
+        finishChunk();
+    }
+
+    if(chunkCount == 0){
+        minLength = 0.0;
+    }
+
+    std::ofstream of(filePath, std::ios::binary);
+    if(!of.is_open()){
+        return;
+    }
+
+    MsgpackWriter writer(of);
+    writer.write_map_header(3);
+
+    writer.write_key("metadata");
+    writer.write_map_header(2);
+    writer.write_key("type");
+    writer.write_str(std::string("dislocation_segments"));
+    writer.write_key("count");
+    writer.write_int(static_cast<int64_t>(chunkCount));
+
+    writer.write_key("data");
+    writer.write_array_header(checked_u32_size(chunkCount));
+
+    for(size_t segmentId = 0; segmentId < orderedSegments.size(); ++segmentId){
+        const auto* segment = orderedSegments[segmentId];
+        std::vector<Point3> currentChunk;
+        auto writeChunk = [&](const std::vector<Point3>& chunk){
+            writer.write_map_header(5);
+            writer.write_key("segment_id");
+            writer.write_int(static_cast<int64_t>(segmentId));
+
+            writer.write_key("points");
+            writer.write_array_header(checked_u32_size(chunk.size()));
+            double chunkLength = 0.0;
+            for(size_t pointIdx = 0; pointIdx < chunk.size(); ++pointIdx){
+                writer.write_array_header(3);
+                writer.write_double(chunk[pointIdx].x());
+                writer.write_double(chunk[pointIdx].y());
+                writer.write_double(chunk[pointIdx].z());
+
+                if(pointIdx > 0){
+                    chunkLength += (chunk[pointIdx] - chunk[pointIdx - 1]).length();
+                }
+            }
+
+            writer.write_key("length");
+            writer.write_double(chunkLength);
+            writer.write_key("num_points");
+            writer.write_int(static_cast<int64_t>(chunk.size()));
+
+            Vector3 burgers = segment->burgersVector.localVec();
+            writer.write_key("burgers");
+            writer.write_map_header(3);
+            writer.write_key("vector");
+            writer.write_array_header(3);
+            writer.write_double(burgers.x());
+            writer.write_double(burgers.y());
+            writer.write_double(burgers.z());
+            writer.write_key("magnitude");
+            writer.write_double(burgers.length());
+            writer.write_key("fractional");
+            writer.write_str(getBurgersVectorString(burgers));
+        };
+
+        clipDislocationLine(
+            segment->line,
+            simulationCell,
+            [&](const Point3& p1, const Point3& p2, bool isInitialSegment){
+                if(isInitialSegment && !currentChunk.empty()){
+                    writeChunk(currentChunk);
+                    currentChunk.clear();
+                }
+
+                if(currentChunk.empty()){
+                    currentChunk.push_back(p1);
+                }
+
+                currentChunk.push_back(p2);
+            }
+        );
+
+        if(!currentChunk.empty()){
+            writeChunk(currentChunk);
+        }
+    }
+
+    writer.write_key("summary");
+    writer.write_map_header(5);
+    writer.write_key("total_points");
+    writer.write_int(totalPoints);
+    writer.write_key("average_segment_length");
+    writer.write_double(chunkCount == 0 ? 0.0 : totalLength / static_cast<double>(chunkCount));
+    writer.write_key("max_segment_length");
+    writer.write_double(maxLength);
+    writer.write_key("min_segment_length");
+    writer.write_double(minLength);
+    writer.write_key("total_length");
+    writer.write_double(totalLength);
+
+    of.flush();
 }
 
 template <typename MeshType>
@@ -541,6 +763,8 @@ void DXAJsonExporter::writeMeshMsgpackToFile(
     const bool isCompletelyGood = interfaceMeshForTopology ? interfaceMeshForTopology->isCompletelyGood() : false;
     const bool isCompletelyBad = interfaceMeshForTopology ? interfaceMeshForTopology->isCompletelyBad() : false;
     const std::size_t edgeCount = includeTopologyInfo ? computeEdgeCount(arrays.faces) : 0;
+    std::vector<Point3>().swap(arrays.vertices);
+    std::vector<std::array<int, 3>>().swap(arrays.faces);
 
     std::ofstream of(filePath, std::ios::binary);
     if(!of.is_open()) return;
@@ -600,6 +824,8 @@ void DXAJsonExporter::writeDefectMeshMsgpackToFile(
     ExportMeshData exportData = buildExportMeshData(arrays, structureAnalysis.context().simCell);
 
     const std::size_t edgeCount = includeTopologyInfo ? computeEdgeCount(arrays.faces) : 0;
+    std::vector<Point3>().swap(arrays.vertices);
+    std::vector<std::array<int, 3>>().swap(arrays.faces);
 
     std::ofstream of(filePath, std::ios::binary);
     if(!of.is_open()) return;
@@ -864,46 +1090,99 @@ void DXAJsonExporter::exportPTMData(
     const std::vector<int>& ids,
     const std::string& outputFilename
 ){
-    json data = getPTMData(context, ids);
-    if(!data.empty()){
-        std::string ptmPath = outputFilename + "_ptm_data.msgpack";
-        writeJsonMsgpackToFile(data, ptmPath);
-        spdlog::info("PTM data written to {}", ptmPath);
+    auto ptmProp = context.ptmOrientation;
+    auto corrProp = context.correspondencesCode;
+    if(!ptmProp || !corrProp){
+        return;
     }
+
+    std::string ptmPath = outputFilename + "_ptm_data.msgpack";
+    std::ofstream of(ptmPath, std::ios::binary);
+    if(!of.is_open()){
+        return;
+    }
+
+    MsgpackWriter writer(of);
+    writer.write_map_header(1);
+    writer.write_key("data");
+    writer.write_array_header(checked_u32_size(ids.size()));
+
+    const bool includeStructureType = context.structureTypes && context.structureTypes->size() >= ids.size();
+    for(size_t i = 0; i < ids.size(); ++i){
+        writer.write_map_header(includeStructureType ? 4u : 3u);
+        writer.write_key("id");
+        writer.write_int(static_cast<int64_t>(ids[i]));
+        writer.write_key("correspondence");
+        writer.write_uint(static_cast<uint64_t>(corrProp->getInt64(i)));
+        if(includeStructureType){
+            writer.write_key("structure_type");
+            writer.write_int(static_cast<int64_t>(context.structureTypes->getInt(i)));
+        }
+        writer.write_key("orientation");
+        writer.write_array_header(4);
+        for(int c = 0; c < 4; ++c){
+            writer.write_double(ptmProp->getDoubleComponent(i, c));
+        }
+    }
+
+    spdlog::info("PTM data written to {}", ptmPath);
 }
 
 void DXAJsonExporter::exportCoreAtoms(
     const LammpsParser::Frame& frame,
-    const std::unordered_set<int>& coreAtomIndices,
+    const std::vector<uint8_t>& coreAtomFlags,
     const std::string& outputFilename
 ){
-    if(coreAtomIndices.empty()) return;
+    if(coreAtomFlags.empty()) return;
 
-    json dataArray = json::array();
-    for(int atomIdx : coreAtomIndices){
-        if(atomIdx >= 0 && atomIdx < static_cast<int>(frame.natoms)){
-            json atomData;
-            atomData["id"] = frame.ids[atomIdx];
-            
-            if(atomIdx < static_cast<int>(frame.positions.size())){
-                const auto& pos = frame.positions[atomIdx];
-                atomData["pos"] = {pos.x(), pos.y(), pos.z()};
-            }
-            
-            dataArray.push_back(atomData);
+    std::size_t validCount = 0;
+    const size_t maxAtoms = std::min(static_cast<size_t>(frame.natoms), coreAtomFlags.size());
+    for(size_t atomIdx = 0; atomIdx < maxAtoms; ++atomIdx){
+        if(coreAtomFlags[atomIdx] != 0){
+            ++validCount;
         }
     }
 
-    json result;
-    result["metadata"] = {
-        {"count", static_cast<int>(dataArray.size())}
-    };
-    result["core_atoms"] = dataArray;
-
-    if(!dataArray.empty()){
-        writeJsonMsgpackToFile(result, outputFilename);
-        spdlog::info("Core atoms data written to {} ({} atoms)", outputFilename, dataArray.size());
+    if(validCount == 0){
+        return;
     }
+
+    std::ofstream of(outputFilename, std::ios::binary);
+    if(!of.is_open()){
+        return;
+    }
+
+    MsgpackWriter writer(of);
+    writer.write_map_header(2);
+
+    writer.write_key("metadata");
+    writer.write_map_header(1);
+    writer.write_key("count");
+    writer.write_int(static_cast<int64_t>(validCount));
+
+    writer.write_key("core_atoms");
+    writer.write_array_header(checked_u32_size(validCount));
+    for(size_t atomIdx = 0; atomIdx < maxAtoms; ++atomIdx){
+        if(coreAtomFlags[atomIdx] == 0){
+            continue;
+        }
+
+        const bool hasPosition = atomIdx < frame.positions.size();
+        writer.write_map_header(hasPosition ? 2u : 1u);
+        writer.write_key("id");
+        writer.write_int(static_cast<int64_t>(frame.ids[atomIdx]));
+        if(hasPosition){
+            const auto& pos = frame.positions[atomIdx];
+            writer.write_key("pos");
+            writer.write_array_header(3);
+            writer.write_double(pos.x());
+            writer.write_double(pos.y());
+            writer.write_double(pos.z());
+        }
+    }
+
+    of.flush();
+    spdlog::info("Core atoms data written to {} ({} atoms)", outputFilename, validCount);
 }
 
 json DXAJsonExporter::exportClusterGraphToJson(const ClusterGraph* graph){
@@ -1376,13 +1655,62 @@ void DXAJsonExporter::exportForStructureIdentification(
 
     std::vector<uint8_t> stOfAtom(N);
     std::vector<size_t> counts(K, 0);
+    using StructureCounts = std::array<size_t, K>;
+    const size_t chunkSize = 16384;
+    const size_t chunkCount = (N + chunkSize - 1) / chunkSize;
+    std::vector<StructureCounts> chunkCounts(chunkCount);
 
-    for(size_t i = 0; i < N; i++){
-        const int raw = structureAnalysis.context().structureTypes->getInt(static_cast<int>(i));
-        const int st = (0 <= raw && raw < K) ? raw : 0;
-        stOfAtom[i] = static_cast<uint8_t>(st);
-        counts[st]++;
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, chunkCount, 16),
+        [&](const tbb::blocked_range<size_t>& r){
+        for(size_t chunkIdx = r.begin(); chunkIdx < r.end(); ++chunkIdx){
+            auto& localCounts = chunkCounts[chunkIdx];
+            localCounts.fill(0);
+
+            const size_t begin = chunkIdx * chunkSize;
+            const size_t end = std::min(N, begin + chunkSize);
+            for(size_t i = begin; i < end; ++i){
+                const int raw = structureAnalysis.context().structureTypes->getInt(static_cast<int>(i));
+                const int st = (0 <= raw && raw < K) ? raw : 0;
+                stOfAtom[i] = static_cast<uint8_t>(st);
+                localCounts[static_cast<size_t>(st)]++;
+            }
+        }
+    });
+
+    for(size_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx){
+        for(int st = 0; st < K; ++st){
+            counts[static_cast<size_t>(st)] += chunkCounts[chunkIdx][static_cast<size_t>(st)];
+        }
     }
+
+    std::vector<StructureCounts> chunkOffsets(chunkCount);
+    StructureCounts runningOffsets{};
+    runningOffsets.fill(0);
+    for(size_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx){
+        chunkOffsets[chunkIdx] = runningOffsets;
+        for(int st = 0; st < K; ++st){
+            runningOffsets[static_cast<size_t>(st)] += chunkCounts[chunkIdx][static_cast<size_t>(st)];
+        }
+    }
+
+    std::vector<std::vector<uint32_t>> structureAtomIndices(K);
+    for(int st = 0; st < K; ++st){
+        structureAtomIndices[static_cast<size_t>(st)].resize(counts[static_cast<size_t>(st)]);
+    }
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, chunkCount, 16),
+        [&](const tbb::blocked_range<size_t>& r){
+        for(size_t chunkIdx = r.begin(); chunkIdx < r.end(); ++chunkIdx){
+            auto writeOffsets = chunkOffsets[chunkIdx];
+            const size_t begin = chunkIdx * chunkSize;
+            const size_t end = std::min(N, begin + chunkSize);
+
+            for(size_t i = begin; i < end; ++i){
+                const size_t st = static_cast<size_t>(stOfAtom[i]);
+                structureAtomIndices[st][writeOffsets[st]++] = static_cast<uint32_t>(i);
+            }
+        }
+    });
 
     std::ofstream of(outputFilename + "_atoms.msgpack", std::ios::binary);
     if(of.is_open()){
@@ -1403,12 +1731,12 @@ void DXAJsonExporter::exportForStructureIdentification(
             writer.write_key(names[st]);
             writer.write_array_header(checked_u32_size(counts[st]));
 
-            for(size_t i = 0; i < N; i++){
-                if(stOfAtom[i] != static_cast<uint8_t>(st)) continue;
-                const Point3& pos = frame.positions[i];
+            for(uint32_t atomIndexRaw : structureAtomIndices[static_cast<size_t>(st)]){
+                const size_t atomIndex = static_cast<size_t>(atomIndexRaw);
+                const Point3& pos = frame.positions[atomIndex];
                 writer.write_map_header(2);
                 writer.write_key("id");
-                writer.write_int(frame.ids[i]);
+                writer.write_int(frame.ids[atomIndex]);
                 writer.write_key("pos");
                 writer.write_array_header(3);
                 writer.write_double(pos.x());
@@ -1430,14 +1758,30 @@ json DXAJsonExporter::getNetworkStatistics(const DislocationNetwork* network, do
     double totalLength = 0.0;
     int validSegments = 0;
     
-    #pragma omp parallel for reduction(+:totalLength,validSegments) schedule(dynamic)
-    for(size_t i = 0; i < segments.size(); ++i){
-        const auto* segment = segments[i];
-        if(segment && !segment->isDegenerate()){
-            totalLength += segment->calculateLength();
-            validSegments++;
+    struct SegmentStats {
+        double length = 0.0;
+        int count = 0;
+    };
+    
+    auto stats_result = tbb::parallel_reduce(
+        tbb::blocked_range<size_t>(0, segments.size()),
+        SegmentStats{},
+        [&segments](const tbb::blocked_range<size_t>& r, SegmentStats val) -> SegmentStats {
+            for(size_t i = r.begin(); i < r.end(); ++i){
+                const auto* segment = segments[i];
+                if(segment && !segment->isDegenerate()){
+                    val.length += segment->calculateLength();
+                    val.count++;
+                }
+            }
+            return val;
+        },
+        [](const SegmentStats& a, const SegmentStats& b) -> SegmentStats {
+            return {a.length + b.length, a.count + b.count};
         }
-    }
+    );
+    totalLength = stats_result.length;
+    validSegments = stats_result.count;
     
     stats = {
         {"total_network_length", totalLength},

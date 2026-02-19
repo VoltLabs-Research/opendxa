@@ -7,8 +7,8 @@
 #include <volt/geometry/interface_mesh.h>
 #include <tbb/concurrent_vector.h>
 #include <tbb/spin_mutex.h>
-#include <unordered_set>
-#include <unordered_map>
+#include <vector>
+#include <cstdint>
 #include <random>
 #include <mutex>
 
@@ -23,7 +23,8 @@ public:
 		_unusedCircuit(nullptr),
 		_markCoreAtoms(markCoreAtoms),
 		_maxBurgersCircuitSize(maxTrialCircuitSize),
-		_maxExtendedBurgersCircuitSize(maxTrialCircuitSize + maxCircuitElongation){}
+		_maxExtendedBurgersCircuitSize(maxTrialCircuitSize + maxCircuitElongation),
+		_coreAtomFlags(mesh.structureAnalysis().context().atomCount(), uint8_t{0}){}
 
 	const InterfaceMesh& mesh() const{
 		return _mesh;
@@ -52,7 +53,7 @@ public:
 		return _danglingNodes;
 	}
 	
-	std::unordered_set<int> _coreAtomIndices;
+	std::vector<uint8_t> _coreAtomFlags;
     std::vector<std::pair<DislocationNode*, bool>> _cellDataForCoreAtomIdentification;
 private:
 	BurgersCircuit* allocateCircuit();
@@ -65,6 +66,7 @@ private:
 	void circuitCircuitIntersection(InterfaceMesh::Edge* circuitAEdge1, InterfaceMesh::Edge* circuitAEdge2, InterfaceMesh::Edge* circuitBEdge1, InterfaceMesh::Edge* circuitBEdge2, int& goingOutside, int& goingInside);
 	void createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength);
 	void findPrimarySegments(int maxBurgersCircuitSize);
+	void findPrimarySegmentsSerial(int maxBurgersCircuitSize);
 	void identifyNodeCoreAtoms(DislocationNode& node, const Point3& newPoint);
 
     struct SearchNode {
@@ -75,7 +77,7 @@ private:
         InterfaceMesh::Edge* viaEdge;
     };
 
-	bool createBurgersCircuit(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize, const std::unordered_map<InterfaceMesh::Vertex*, SearchNode*>& visited_map);
+	bool createBurgersCircuit(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize, const std::vector<SearchNode*>& visited_nodes);
 	bool intersectsOtherCircuits(BurgersCircuit* circuit);
 	bool tryRemoveTwoCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2);
 	bool tryRemoveThreeCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2, bool isPrimarySegment);

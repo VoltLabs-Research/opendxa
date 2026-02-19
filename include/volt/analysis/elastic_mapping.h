@@ -2,7 +2,6 @@
 
 #include <volt/core/volt.h>
 #include <volt/geometry/delaunay_tessellation.h>
-#include <volt/utilities/memory_pool.h>
 #include <volt/structures/cluster.h>
 #include <volt/structures/cluster_graph.h>
 #include <volt/analysis/structure_analysis.h>
@@ -13,10 +12,10 @@ class ElasticMapping{
     struct TessellationEdge{
         int vertex1;
         int vertex2;
-        Vector3 clusterVector{};
+        int nextLeavingEdge = -1;
+        int nextArrivingEdge = -1;
         ClusterTransition* clusterTransition = nullptr;
-        TessellationEdge* nextLeavingEdge = nullptr;
-        TessellationEdge* nextArrivingEdge = nullptr;
+        Vector3 clusterVector{};
 
         TessellationEdge(int v1, int v2) noexcept : vertex1(v1), vertex2(v2){}
 
@@ -39,7 +38,7 @@ public:
         : _structureAnalysis(sa)
         , _tessellation(tess)
         , _clusterGraph(sa.clusterGraph())
-        , _vertexEdges(sa.context().atomCount(), {nullptr, nullptr})
+        , _vertexEdges(sa.context().atomCount(), {-1, -1})
         , _vertexClusters(sa.context().atomCount(), nullptr){}
 
     [[nodiscard]] auto structureAnalysis() const noexcept -> StructureAnalysis& {
@@ -68,6 +67,11 @@ public:
     [[nodiscard]] auto isElasticMappingCompatible(DelaunayTessellation::CellHandle cell) const -> bool;
     void releaseCaches() noexcept;
 
+    void shrinkVertexStorage() noexcept{
+        _vertexEdges.shrink_to_fit();
+        _vertexClusters.shrink_to_fit();
+    }
+
     [[nodiscard]] auto clusterOfVertex(int idx) const noexcept -> Cluster*{
 		assert(idx < (int)_vertexClusters.size());
 		return _vertexClusters[idx];
@@ -91,15 +95,17 @@ private:
 		return _edgeCount;
 	}
 
-    [[nodiscard]] auto findEdge(int v1, int v2) const noexcept -> TessellationEdge* {
+    [[nodiscard]] auto findEdge(int v1, int v2) const noexcept -> TessellationEdge const* {
         assert(v1 >= 0 && v1 < static_cast<int>(_vertexEdges.size()));
         assert(v2 >= 0 && v2 < static_cast<int>(_vertexEdges.size()));
 
-		for(auto* e = _vertexEdges[v1].first; e; e = e->nextLeavingEdge){
+		for(int edgeIdx = _vertexEdges[v1].first; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextLeavingEdge){
+            auto const* e = &_edges[edgeIdx];
             if(e->vertex2 == v2) return e;
 		}
 
-		for(auto* e = _vertexEdges[v1].second; e; e = e->nextArrivingEdge){
+		for(int edgeIdx = _vertexEdges[v1].second; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextArrivingEdge){
+            auto const* e = &_edges[edgeIdx];
             if(e->vertex1 == v2) return e;
 		}
 
@@ -111,9 +117,9 @@ private:
     DelaunayTessellation& _tessellation;
     ClusterGraph& _clusterGraph;
 
-    MemoryPool<TessellationEdge> _edgePool{ 16'384 };
+    std::vector<TessellationEdge> _edges;
     int _edgeCount = 0;
-    std::vector<std::pair<TessellationEdge*, TessellationEdge*>> _vertexEdges;
+    std::vector<std::pair<int, int>> _vertexEdges;
     std::vector<Cluster*> _vertexClusters;
 };
 
