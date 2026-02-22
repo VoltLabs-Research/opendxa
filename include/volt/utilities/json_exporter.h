@@ -23,7 +23,6 @@ namespace Volt{
 using json = nlohmann::json;
 
 class ElasticStrainEngine;
-class MsgpackWriter;
 class BurgersLoopBuilder;
 
 class DXAJsonExporter{
@@ -163,7 +162,6 @@ private:
     double calculateAverageVertexDegree(const InterfaceMesh* interfaceMesh);
     double calculateAngle(const Vector3& a, const Vector3& b);
 
-    void writeJsonAsMsgpack(MsgpackWriter& writer, const json& data, bool sortKeys = true);
 };
 
 // TODO: ?

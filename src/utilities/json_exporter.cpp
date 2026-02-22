@@ -13,7 +13,7 @@
 #include <thread>
 #include <future>
 #include <mutex>
-#include <volt/utilities/msgpack_writer.h>
+#include <volt/utilities/json_utils.h>
 #include <volt/elastic_strain_engine.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
@@ -1427,85 +1427,8 @@ json DXAJsonExporter::segmentToJson(const DislocationSegment* segment, bool incl
     return segmentJson;
 }
 
-void DXAJsonExporter::writeJsonAsMsgpack(MsgpackWriter& writer, const json& data, bool sortKeys){
-    if(data.is_discarded() || data.is_null()){
-        writer.write_nil();
-        return;
-    }
-
-    if(data.is_boolean()){
-        writer.write_bool(data.get<bool>());
-        return;
-    }
-
-    if(data.is_number_unsigned()){
-        writer.write_uint(data.get<uint64_t>());
-        return;
-    }
-
-    if(data.is_number_integer()){
-        writer.write_int(data.get<int64_t>());
-        return;
-    }
-
-    if(data.is_number_float()){
-        writer.write_double(data.get<double>());
-        return;
-    }
-
-    if(data.is_string()){
-        const std::string& str = data.get_ref<const std::string&>();
-        writer.write_str(str);
-        return;
-    }
-
-    if(data.is_array()){
-        const uint32_t n = checked_u32_size(data.size());
-        writer.write_array_header(n);
-        for(const auto &el : data){
-            writeJsonAsMsgpack(writer, el, sortKeys);
-        }
-        return;
-    }
-
-    if(data.is_object()){
-        const uint32_t n = checked_u32_size(data.size());
-        writer.write_map_header(n);
-
-        if(!sortKeys){
-            for(auto it = data.begin(); it != data.end(); it++){
-                writer.write_key(it.key());
-                writeJsonAsMsgpack(writer, it.value(), sortKeys);
-            }
-        }else{
-            std::vector<std::string> keys;
-            keys.reserve(data.size());
-            for(auto it = data.begin(); it != data.end(); it++){
-                keys.push_back(it.key());
-            }
-            std::sort(keys.begin(), keys.end());
-            for(const auto &k : keys){
-                writer.write_key(k);
-                writeJsonAsMsgpack(writer, data.at(k), sortKeys);
-            }
-        }
-        return;
-    }
-
-    writer.write_nil();
-}
-
 bool DXAJsonExporter::writeJsonMsgpackToFile(const json &data, const std::string &filePath, bool sortKeys){
-    try{
-        std::ofstream of(filePath, std::ios::binary);
-        if(!of.is_open()) return false;
-        MsgpackWriter writer(of);
-        writeJsonAsMsgpack(writer, data, sortKeys);
-        of.flush();
-        return true;
-    }catch(...){
-        return false;
-    }
+    return JsonUtils::writeJsonMsgpackToFile(data, filePath, sortKeys);
 }
 
 std::string DXAJsonExporter::getBurgersVectorString(const Vector3& burgers){

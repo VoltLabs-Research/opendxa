@@ -5,7 +5,6 @@
 #include <volt/utilities/concurrence/parallel_system.h>
 #include <volt/analysis/analysis_context.h>
 #include <volt/analysis/cluster_connector.h>
-#include <volt/utilities/msgpack_writer.h>
 #include <spdlog/spdlog.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
