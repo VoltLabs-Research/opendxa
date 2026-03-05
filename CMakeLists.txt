@@ -34,15 +34,7 @@ set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS Debug Release MinSizeRel Re
 
 find_package(coretoolkit REQUIRED)
 find_package(structure-identification REQUIRED)
-find_package(atomic-strain REQUIRED)
-find_package(centrosymmetry REQUIRED)
-find_package(cluster-analysis REQUIRED)
-find_package(coordination-analysis REQUIRED)
-find_package(displacement-analysis REQUIRED)
-find_package(elastic-strain REQUIRED)
-find_package(grain-segmentation REQUIRED)
 find_package(spdlog REQUIRED)
-find_package(fmt REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
 file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
@@ -59,15 +51,7 @@ target_compile_definitions(${PROJECT_NAME}_lib PUBLIC
 target_link_libraries(${PROJECT_NAME}_lib PUBLIC
 	coretoolkit::coretoolkit
 	structure-identification::structure-identification
-	atomic-strain::atomic-strain
-	centrosymmetry::centrosymmetry
-	cluster-analysis::cluster-analysis
-	coordination-analysis::coordination-analysis
-	displacement-analysis::displacement-analysis
-	elastic-strain::elastic-strain
-	grain-segmentation::grain-segmentation
 	spdlog::spdlog
-	fmt::fmt
 	nlohmann_json::nlohmann_json
 )
 

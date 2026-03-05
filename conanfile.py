@@ -11,15 +11,7 @@ class OpenDXAConan(ConanFile):
     requires = (
         "coretoolkit/1.0.0",
         "structure-identification/1.0.0",
-        "atomic-strain/1.0.0",
-        "centrosymmetry/1.0.0",
-        "cluster-analysis/1.0.0",
-        "coordination-analysis/1.0.0",
-        "displacement-analysis/1.0.0",
-        "elastic-strain/1.0.0",
-        "grain-segmentation/1.0.0",
         "spdlog/1.14.1",
-        "fmt/10.2.1",
         "nlohmann_json/3.11.3",
     )
     exports_sources = "CMakeLists.txt", "include/*", "src/*"
