@@ -6,6 +6,7 @@
 #include <volt/analysis/analysis_context.h>
 #include <volt/analysis/cluster_connector.h>
 #include <spdlog/spdlog.h>
+#include <volt/utilities/json_utils.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
@@ -313,33 +314,7 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
 
     spdlog::debug("Total line length: {} ", totalLineLength);
 
-    {
-        try{
-            PROFILE("JSON Exporter - Export Analysis Data");
-            result = _jsonExporter.exportAnalysisData(
-                &network,
-                defectMesh,
-                &interfaceMesh,
-                frame,
-                &tracer,
-                outputFile.empty() ? &extractedStructureTypes : nullptr,
-                true,
-                true,
-                false,
-                outputFile.empty()
-            );
-            mark_stage("export_analysis_data");
-        }catch(const std::exception& e){
-            result["is_failed"] = true;
-            result["error"] = e.what();
-            result["stage_metrics"] = std::move(stage_metrics);
-            return result;
-        }
-    }
-
-    if(!result.contains("is_failed")){
-        result["is_failed"] = false;
-    }
+    result["is_failed"] = false;
 
     if(!outputFile.empty()){
         {
@@ -372,7 +347,7 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         {
             PROFILE("Streaming Simulation Cell MsgPack");
             auto simCellInfo = _jsonExporter.getExtendedSimulationCellInfo(frame.simulationCell);
-            _jsonExporter.writeJsonMsgpackToFile(simCellInfo, outputFile + "_simulation_cell.msgpack");
+            JsonUtils::writeJsonMsgpackToFile(simCellInfo, outputFile + "_simulation_cell.msgpack", false);
         }
         mark_stage("stream_simulation_cell_msgpack");
 

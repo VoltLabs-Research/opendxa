@@ -1,283 +1,19 @@
 #include <volt/utilities/json_exporter.h>
 #include <volt/analysis/burgers_circuit.h>
 #include <volt/analysis/burgers_loop_builder.h>
-#include <fstream>
 #include <iomanip>
-#include <filesystem>
-#include <climits>
+#include <numeric>
 #include <unordered_set>
 #include <algorithm>
 #include <cmath>
 #include <array>
 #include <cstdint>
-#include <thread>
-#include <future>
-#include <mutex>
 #include <volt/utilities/json_utils.h>
-#include <volt/elastic_strain_engine.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
 
 namespace Volt {
-
-namespace {
-
-struct MeshArrays {
-    std::vector<Point3> vertices;
-    std::vector<std::array<int, 3>> faces;
-    std::size_t originalVertexCount = 0;
-    std::size_t originalFaceCount = 0;
-};
-
-template <typename MeshType>
-MeshArrays buildMeshArraysFromMesh(const MeshType& mesh){
-    MeshArrays arrays;
-    const auto& originalVertices = mesh.vertices();
-    const auto& originalFaces = mesh.faces();
-
-    arrays.originalVertexCount = originalVertices.size();
-    arrays.originalFaceCount = originalFaces.size();
-    arrays.vertices.reserve(originalVertices.size());
-    for(const auto* v : originalVertices){
-        arrays.vertices.push_back(v->pos());
-    }
-
-    arrays.faces.reserve(originalFaces.size());
-    for(const auto* face : originalFaces){
-        if(!face || !face->edges()) continue;
-        std::array<int, 3> indices{};
-        int count = 0;
-        auto* startEdge = face->edges();
-        auto* currentEdge = startEdge;
-        do{
-            if(count < 3){
-                indices[count] = currentEdge->vertex1()->index();
-            }
-            count++;
-            currentEdge = currentEdge->nextFaceEdge();
-        }while(currentEdge != startEdge);
-
-        if(count == 3){
-            arrays.faces.push_back(indices);
-        }
-    }
-
-    return arrays;
-}
-
-MeshArrays buildDefectMeshArrays(const InterfaceMesh& interfaceMesh, const BurgersLoopBuilder& tracer){
-    MeshArrays arrays;
-    const auto& originalVertices = interfaceMesh.vertices();
-    const auto& originalFaces = interfaceMesh.faces();
-
-    arrays.originalVertexCount = originalVertices.size() + tracer.danglingNodes().size();
-    arrays.originalFaceCount = 0;
-    arrays.vertices.reserve(arrays.originalVertexCount);
-    for(const auto* v : originalVertices){
-        arrays.vertices.push_back(v->pos());
-    }
-
-    const std::size_t baseVertexCount = originalVertices.size();
-    arrays.faces.reserve(originalFaces.size());
-    for(const auto* face : originalFaces){
-        if(!face || !face->edges()) continue;
-        if(face->circuit && (face->testFlag(1) || !face->circuit->isDangling)){
-            continue;
-        }
-        std::array<int, 3> indices{};
-        int count = 0;
-        auto* startEdge = face->edges();
-        auto* currentEdge = startEdge;
-        do{
-            if(count < 3){
-                indices[count] = currentEdge->vertex1()->index();
-            }
-            count++;
-            currentEdge = currentEdge->nextFaceEdge();
-        }while(currentEdge != startEdge);
-
-        if(count == 3){
-            arrays.faces.push_back(indices);
-            arrays.originalFaceCount++;
-        }
-    }
-
-    std::size_t capIndex = 0;
-    for(const auto* node : tracer.danglingNodes()){
-        arrays.vertices.push_back(node->position());
-        const int capVertexIndex = static_cast<int>(baseVertexCount + capIndex);
-        capIndex++;
-
-        const auto* circuit = node->circuit;
-        if(!circuit) continue;
-        for(const auto* edge : circuit->segmentMeshCap){
-            std::array<int, 3> indices{
-                edge->vertex2()->index(),
-                edge->vertex1()->index(),
-                capVertexIndex
-            };
-            arrays.faces.push_back(indices);
-            arrays.originalFaceCount++;
-        }
-    }
-
-    return arrays;
-}
-
-std::size_t computeEdgeCount(const std::vector<std::array<int, 3>>& faces){
-    std::unordered_set<uint64_t> edges;
-    edges.reserve(faces.size() * 3);
-    for(const auto& face : faces){
-        auto add_edge = [&](int v1, int v2){
-            if(v1 > v2) std::swap(v1, v2);
-            uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(v1)) << 32)
-                | static_cast<uint32_t>(v2);
-            edges.insert(key);
-        };
-        add_edge(face[0], face[1]);
-        add_edge(face[1], face[2]);
-        add_edge(face[2], face[0]);
-    }
-    return edges.size();
-}
-
-struct ExportMeshData {
-    std::vector<Point3> points;
-    std::vector<std::array<int, 3>> faces;
-};
-
-int comparePointLexicographic(const Point3& a, const Point3& b){
-    if(a.x() < b.x()) return -1;
-    if(a.x() > b.x()) return 1;
-    if(a.y() < b.y()) return -1;
-    if(a.y() > b.y()) return 1;
-    if(a.z() < b.z()) return -1;
-    if(a.z() > b.z()) return 1;
-    return 0;
-}
-
-bool dislocationSegmentLess(const DislocationSegment* lhs, const DislocationSegment* rhs){
-    const Vector3 lhsB = lhs->burgersVector.localVec();
-    const Vector3 rhsB = rhs->burgersVector.localVec();
-    if(lhsB.x() < rhsB.x()) return true;
-    if(lhsB.x() > rhsB.x()) return false;
-    if(lhsB.y() < rhsB.y()) return true;
-    if(lhsB.y() > rhsB.y()) return false;
-    if(lhsB.z() < rhsB.z()) return true;
-    if(lhsB.z() > rhsB.z()) return false;
-
-    if(lhs->line.size() != rhs->line.size()){
-        return lhs->line.size() < rhs->line.size();
-    }
-
-    for(size_t i = 0; i < lhs->line.size(); ++i){
-        const int cmp = comparePointLexicographic(lhs->line[i], rhs->line[i]);
-        if(cmp < 0) return true;
-        if(cmp > 0) return false;
-    }
-
-    const double lhsLength = lhs->calculateLength();
-    const double rhsLength = rhs->calculateLength();
-    return lhsLength < rhsLength;
-}
-
-std::vector<const DislocationSegment*> buildDeterministicSegments(const DislocationNetwork* network){
-    std::vector<const DislocationSegment*> orderedSegments;
-    const auto& segments = network->segments();
-    orderedSegments.reserve(segments.size());
-    for(const auto* segment : segments){
-        if(segment && !segment->isDegenerate()){
-            orderedSegments.push_back(segment);
-        }
-    }
-    std::sort(orderedSegments.begin(), orderedSegments.end(), dislocationSegmentLess);
-    return orderedSegments;
-}
-
-ExportMeshData buildExportMeshData(const MeshArrays& arrays, const SimulationCell& cell){
-    ExportMeshData exportData;
-    exportData.points.reserve(arrays.vertices.size() + arrays.faces.size());
-    for(const auto& pos : arrays.vertices){
-        exportData.points.push_back(pos);
-    }
-
-    exportData.faces.reserve(arrays.faces.size());
-    for(const auto& faceIndices : arrays.faces){
-        std::array<Point3, 3> faceVertexPositions = {
-            arrays.vertices[faceIndices[0]],
-            arrays.vertices[faceIndices[1]],
-            arrays.vertices[faceIndices[2]]
-        };
-
-        cell.unwrapPositions(faceVertexPositions.data(), faceVertexPositions.size());
-
-        std::array<int, 3> newFaceIndices{};
-        for(int i = 0; i < 3; ++i){
-            const int originalIndex = faceIndices[i];
-            const Point3& originalPos = arrays.vertices[originalIndex];
-            const Point3& unwrappedPos = faceVertexPositions[i];
-			if(!originalPos.equals(unwrappedPos, 1e-6)){
-                newFaceIndices[i] = static_cast<int>(exportData.points.size());
-                exportData.points.push_back(unwrappedPos);
-            }else{
-                newFaceIndices[i] = originalIndex;
-            }
-        }
-        exportData.faces.push_back(newFaceIndices);
-    }
-
-    return exportData;
-}
-
-
-} // namespace
-
-json DXAJsonExporter::exportAnalysisData(
-    const DislocationNetwork* network,
-    const HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>& defectMesh,
-    const InterfaceMesh* interfaceMesh, 
-    const LammpsParser::Frame& frame,
-    const BurgersLoopBuilder* tracer,
-    const std::vector<int>* structureTypes,
-    bool includeDetailedNetworkInfo,
-    bool includeTopologyInfo,
-    bool includeDislocationsInMemory,
-    bool includeAtomsInMemory
-){
-    json data;
-
-    if(includeDislocationsInMemory){
-        data["dislocations"] = exportDislocationsToJson(network, includeDetailedNetworkInfo, &frame.simulationCell);
-    }
-
-    if(includeAtomsInMemory){
-        data["atoms"] = getAtomsData(frame, tracer, structureTypes);
-    }
-    //data["cluster_graph"] = exportClusterGraphToJson(&network->clusterGraph());
-    data["simulation_cell"] = getExtendedSimulationCellInfo(frame.simulationCell);
-    data["structures"] = interfaceMesh->structureAnalysis().getStructureStatisticsJson();
-    
-    if(includeDetailedNetworkInfo){
-        data["network_statistics"] = getNetworkStatistics(network, frame.simulationCell.volume3D());
-        data["junction_information"] = getJunctionInformation(network);
-        data["circuit_information"] = getCircuitInformation(network);
-    }
-    
-    if(includeTopologyInfo){
-        data["topology"] = getTopologyInformation(interfaceMesh);
-    }
-    
-    data["processing_time"] = getProcessingTime();
-    
-    data["metadata"] = getMetadata();
-    data["metadata"]["analysis_timestamp"] = std::chrono::duration_cast<std::chrono::seconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
-    data["metadata"]["timestep"] = frame.timestep;
-    data["metadata"]["atom_count"] = frame.natoms;
-    
-    return data;
-}
 
 void clipDislocationLine(
     const std::vector<Point3>& line,
@@ -362,12 +98,17 @@ void clipDislocationLine(
 
 json DXAJsonExporter::exportDislocationsToJson(
     const DislocationNetwork* network, 
-    bool includeDetailedInfo, 
     const SimulationCell* simulationCell
 ){
-    (void)includeDetailedInfo;
     json dislocations;
-    std::vector<const DislocationSegment*> orderedSegments = buildDeterministicSegments(network);
+    const auto& segments = network->segments();
+    std::vector<const DislocationSegment*> validSegments;
+    validSegments.reserve(segments.size());
+    for(const auto* segment : segments){
+        if(segment && !segment->isDegenerate()){
+            validSegments.push_back(segment);
+        }
+    }
 
     json dataArray = json::array();
     double totalLength = 0.0;
@@ -406,8 +147,8 @@ json DXAJsonExporter::exportDislocationsToJson(
         minLength = std::min(minLength, chunkLength);
     };
 
-    for(size_t segmentId = 0; segmentId < orderedSegments.size(); ++segmentId){
-        const auto* segment = orderedSegments[segmentId];
+    for(size_t segmentId = 0; segmentId < validSegments.size(); ++segmentId){
+        const auto* segment = validSegments[segmentId];
         if(simulationCell){
             std::vector<Point3> currentChunk;
             clipDislocationLine(segment->line, *simulationCell, 
@@ -450,6 +191,12 @@ json DXAJsonExporter::exportDislocationsToJson(
     dislocations["sub_listings"] = { { "dislocation_segments", dataArray } };
     dislocations["export"]["DislocationExporter"]["segments"] = dataArray;
 
+    dislocations["sub_listings"]["junction_information"] = getJunctionInformation(network);
+    dislocations["sub_listings"]["circuit_information"] = getCircuitInformation(network);
+    if(simulationCell){
+        dislocations["sub_listings"]["network_statistics"] = getNetworkStatistics(network, simulationCell->volume3D());
+    }
+
     return dislocations;
 }
 
@@ -460,7 +207,7 @@ void DXAJsonExporter::writeDislocationsMsgpackToFile(
     const std::string& filePath
 ){
     if(network == nullptr) return;
-    const json data = exportDislocationsToJson(network, true, &simulationCell);
+    const json data = exportDislocationsToJson(network, &simulationCell);
     JsonUtils::writeJsonMsgpackToFile(data, filePath, false);
 }
 
@@ -598,216 +345,6 @@ void DXAJsonExporter::writeDefectMeshMsgpackToFile(
     JsonUtils::writeJsonMsgpackToFile(data, filePath, false);
 }
 
-json DXAJsonExporter::getAtomsData(
-    const LammpsParser::Frame& frame, 
-    const BurgersLoopBuilder* tracer,
-    const std::vector<int>* structureTypes
-){
-    std::map<std::string, json> groupedAtoms;
-
-    for(size_t i = 0; i < frame.natoms; ++i){
-        int structureType = 0;
-        if(structureTypes && i < static_cast<int>(structureTypes->size())){
-            structureType = (*structureTypes)[i];
-        }
-
-        std::string typeName = tracer->mesh().structureAnalysis().getStructureTypeName(structureType);
-        
-        json atomJson;
-        atomJson["id"] = frame.ids[i];
-        atomJson["structure_type"] = structureType;
-
-        if(tracer->mesh().structureAnalysis().usingPTM()){
-            //Quaternion quat = tracer->mesh().structureAnalysis().getPTMAtomOrientation(i);
-            //atomJson["ptm_quaternion"] = {quat.x(), quat.y(), quat.z(), quat.w()};
-        }
-        
-        if(i < static_cast<int>(frame.positions.size())){
-            const auto& pos = frame.positions[i];
-            atomJson["pos"] = {pos.x(), pos.y(), pos.z()};
-        }else{
-            atomJson["pos"] = {0.0, 0.0, 0.0};
-        }
-        
-        if(!groupedAtoms[typeName].is_array()){
-            groupedAtoms[typeName] = json::array();
-        }
-
-        groupedAtoms[typeName].push_back(atomJson);
-    }
-    
-    return json(groupedAtoms);
-}
-
-json DXAJsonExporter::getAtomicStrainData(
-    const AtomicStrainModifier::AtomicStrainEngine& engine,
-    const std::vector<int>& ids
-){
-    json result;
-    
-    auto shear = engine.shearStrains();
-    auto volumetric = engine.volumetricStrains();
-    auto strainProp = engine.strainTensors();
-    auto defgrad = engine.deformationGradients();
-    auto D2minProp = engine.nonaffineSquaredDisplacements();
-    auto invalid = engine.invalidParticles();
-
-    size_t n = ids.size();
-    
-    // Calculate summary stats
-    double totalShear = 0.0;
-    double totalVolumetric = 0.0;
-    double maxShear = 0.0;
-    int count = 0;
-
-    for(size_t i = 0; i < n; ++i){
-        if(shear){
-            double s = shear->getDouble(i);
-            totalShear += s;
-            if(s > maxShear) maxShear = s;
-        }
-        if(volumetric) totalVolumetric += volumetric->getDouble(i);
-        count++;
-    }
-
-    result["metadata"] = {
-        {"count", n},
-        {"num_invalid_particles", engine.numInvalidParticles()}
-    };
-
-    result["summary"] = {
-        {"average_shear_strain", count > 0 ? totalShear / count : 0.0},
-        {"average_volumetric_strain", count > 0 ? totalVolumetric / count : 0.0},
-        {"max_shear_strain", maxShear}
-    };
-
-    json dataArray = json::array();
-    for(size_t i = 0; i < n; ++i){
-        json atomData;
-        atomData["id"] = ids[i];
-        atomData["shear_strain"] = shear ? shear->getDouble(i) : 0.0;
-        atomData["volumetric_strain"] = volumetric ? volumetric->getDouble(i) : 0.0;
-
-        if(strainProp){
-            json tensor = json::array();
-            for(int k = 0; k < 6; ++k) tensor.push_back(strainProp->getDoubleComponent(i, k));
-            atomData["strain_tensor"] = tensor;
-        }
-
-        if(defgrad){
-            json grad = json::array();
-            for(int k = 0; k < 9; ++k) grad.push_back(defgrad->getDoubleComponent(i, k));
-            atomData["deformation_gradient"] = grad;
-        }
-
-        if(D2minProp){
-            atomData["D2min"] = D2minProp->getDouble(i);
-        }
-
-        if(invalid){
-            atomData["invalid"] = (invalid->getInt(i) != 0);
-        }
-
-        dataArray.push_back(atomData);
-    }
-
-    result["data"] = dataArray;
-    return result;
-}
-
-json DXAJsonExporter::getElasticStrainData(
-    const ElasticStrainEngine& engine,
-    const std::vector<int>& ids
-){
-    json result;
-    
-    auto volumetric = engine.volumetricStrains();
-    auto strainTensor = engine.strainTensors();
-    auto defGrad = engine.deformationGradients();
-
-    size_t n = ids.size();
-
-    // Summary stats
-    double totalVolumetric = 0.0;
-    int count = 0;
-    for(size_t i = 0; i < n; ++i){
-        if(volumetric){
-            totalVolumetric += volumetric->getDouble(i);
-        }
-        count++;
-    }
-
-    result["metadata"] = {
-        {"count", n}
-    };
-
-    result["summary"] = {
-        {"average_volumetric_strain", count > 0 ? totalVolumetric / count : 0.0}
-    };
-
-    json dataArray = json::array();
-    for(size_t i = 0; i < n; ++i){
-        json atomData;
-        atomData["id"] = ids[i];
-
-        if(volumetric){
-            atomData["volumetric_strain"] = volumetric->getDouble(i);
-        }
-
-        if(strainTensor){
-            json tensor = json::array();
-            for(int c = 0; c < 6; ++c) tensor.push_back(strainTensor->getDoubleComponent(i, c));
-            atomData["strain_tensor"] = tensor;
-        }
-
-        if(defGrad){
-            json grad = json::array();
-            for(int c = 0; c < 9; ++c) grad.push_back(defGrad->getDoubleComponent(i, c));
-            atomData["deformation_gradient"] = grad;
-        }
-
-        dataArray.push_back(atomData);
-    }
-
-    result["data"] = dataArray;
-    return result;
-}
-
-json DXAJsonExporter::getPTMData(
-    const AnalysisContext& context,
-    const std::vector<int>& ids
-){
-    json result;
-    auto ptmProp = context.ptmOrientation;
-    auto corrProp = context.correspondencesCode;
-
-    if(!ptmProp || !corrProp){
-        return result;
-    }
-
-    size_t n = ids.size();
-    json dataArray = json::array();
-
-    for(size_t i = 0; i < n; ++i){
-        json atomData;
-        atomData["id"] = ids[i];
-        atomData["correspondence"] = corrProp->getInt64(i);
-        
-        if(context.structureTypes && i < context.structureTypes->size()){
-            atomData["structure_type"] = context.structureTypes->getInt(i);
-        }
-        
-        json orient = json::array();
-        for(int c = 0; c < 4; ++c) orient.push_back(ptmProp->getDoubleComponent(i, c));
-        atomData["orientation"] = orient;
-        
-        dataArray.push_back(atomData);
-    }
-
-    result["data"] = dataArray;
-    return result;
-}
-
 void DXAJsonExporter::exportPTMData(
     const AnalysisContext& context,
     const std::vector<int>& ids,
@@ -879,119 +416,12 @@ void DXAJsonExporter::exportCoreAtoms(
     }
 }
 
-json DXAJsonExporter::exportClusterGraphToJson(const ClusterGraph* graph){
-    json clusterGraphJson;
-
-    clusterGraphJson["metadata"] = {
-        {"type", "cluster_graph"},
-        {"cluster_count", static_cast<int>(graph->clusters().size())},
-        {"transition_count", static_cast<int>(graph->clusterTransitions().size())}
-    };
-
-    json clustersJson = json::array();
-    for (const Cluster* cluster : graph->clusters()) {
-        if (!cluster) continue;
-
-        json clusterJson;
-        clusterJson["id"] = cluster->id;
-        clusterJson["structure"] = cluster->structure;
-        clusterJson["atom_count"] = cluster->atomCount;
-        clusterJson["orientation"] = matrixToJson(cluster->orientation);
-
-        if (cluster->parentTransition) {
-            clusterJson["parent_cluster"] = cluster->parentTransition->cluster2->id;
-        }
-
-        clustersJson.push_back(clusterJson);
-    }
-
-    json transitionsJson = json::array();
-    for (const ClusterTransition* t : graph->clusterTransitions()) {
-        if (!t) continue;
-
-        json transitionJson;
-        transitionJson["cluster1"] = t->cluster1->id;
-        transitionJson["cluster2"] = t->cluster2->id;
-        transitionJson["area"] = t->area.load();
-        transitionJson["distance"] = t->distance;
-        transitionJson["transformation"] = matrixToJson(t->tm);
-
-        transitionsJson.push_back(transitionJson);
-    }
-
-    clusterGraphJson["clusters"] = clustersJson;
-    clusterGraphJson["transitions"] = transitionsJson;
-
-    return clusterGraphJson;
-}
-
-json DXAJsonExporter::getProcessingTime(){
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - _startTime);
-    
-    json timeData;
-    timeData["duration_ms"] = duration.count();
-    timeData["duration_seconds"] = duration.count() / 1000.0;
-    timeData["start_time"] = std::chrono::duration_cast<std::chrono::seconds>(_startTime.time_since_epoch()).count();
-    timeData["end_time"] = std::chrono::duration_cast<std::chrono::seconds>(endTime.time_since_epoch()).count();
-    
-    return timeData;
-}
-
-json DXAJsonExporter::getMetadata(){
-    json metadata;
-    metadata["export_timestamp"] = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    
-    if(!_filename.empty()){
-        std::filesystem::path filepath(_filename);
-        metadata["source_file"] = filepath.filename().string();
-        metadata["source_path"] = filepath.string();
-    }
-    
-    return metadata;
-}
-
-bool DXAJsonExporter::saveToFile(const json& data, const std::string& filepath){
-    try{
-        std::ofstream file(filepath);
-        if(!file.is_open()){
-            return false;
-        }
-        
-        file << std::setw(2) << data << std::endl;
-        return true;
-    }catch(const std::exception&){
-        return false;
-    }
-}
-
-
-json DXAJsonExporter::pointToJson(const Point3& point){
-    json pointJson;
-    pointJson["x"] = point.x();
-    pointJson["y"] = point.y();
-    pointJson["z"] = point.z();
-    return pointJson;
-}
-
 json DXAJsonExporter::vectorToJson(const Vector3& vector){
     json vectorJson;
     vectorJson["x"] = vector.x();
     vectorJson["y"] = vector.y();
     vectorJson["z"] = vector.z();
     return vectorJson;
-}
-
-json DXAJsonExporter::matrixToJson(const Matrix3& matrix){
-    json matrixJson = json::array();
-    for (int i = 0; i < 3; ++i) {
-        json row = json::array();
-        for (int j = 0; j < 3; ++j) {
-            row.push_back(matrix(i, j));
-        }
-        matrixJson.push_back(row);
-    }
-    return matrixJson;
 }
 
 json DXAJsonExporter::affineTransformationToJson(const AffineTransformation& transform){
@@ -1065,194 +495,11 @@ json DXAJsonExporter::getExtendedSimulationCellInfo(const SimulationCell& cell){
     return cellJson;
 }
 
-json DXAJsonExporter::segmentToJson(const DislocationSegment* segment, bool includeDetailedInfo){
-    json segmentJson;
-    
-    segmentJson["length"] = segment->calculateLength();
-    
-    Vector3 burgers = segment->burgersVector.localVec();
-    segmentJson["burgers_vector"] = vectorToJson(burgers);
-	segmentJson["burgers_magnitude"] = burgers.length();
-    segmentJson["burgers_string"] = getBurgersVectorString(burgers);
-
-    if(segment->line.size() >= 2){
-	Vector3 lineDir = (segment->line.back() - segment->line.front()).normalized();
-        segmentJson["line_direction"] = vectorToJson(lineDir);
-        segmentJson["line_direction_string"] = getLineDirectionString(lineDir);
-    }
-    
-    json points = json::array();
-    for(const auto& point : segment->line){
-        points.push_back(pointToJson(point));
-    }
-
-    segmentJson["points"] = points;
-    segmentJson["point_count"] = points.size();
-    
-    segmentJson["id"] = segment->id;
-    segmentJson["is_closed_loop"] = segment->isClosedLoop();
-    segmentJson["is_infinite_line"] = segment->isInfiniteLine();
-    segmentJson["is_degenerate"] = segment->isDegenerate();
-    
-    if(includeDetailedInfo){
-        if(!segment->coreSize.empty()){
-            json coreSizes = json::array();
-            for(size_t coreSize : segment->coreSize){
-                coreSizes.push_back(coreSize);
-            }
-            segmentJson["core_sizes"] = coreSizes;
-            segmentJson["average_core_size"] = 
-                std::accumulate(segment->coreSize.begin(), segment->coreSize.end(), 0.0) / segment->coreSize.size();
-        }
-        
-        segmentJson["nodes"] = {
-            {"forward", nodeToJson(&segment->forwardNode())},
-            {"backward", nodeToJson(&segment->backwardNode())}
-        };
-        
-        if(segment->forwardNode().circuit){
-            segmentJson["forward_circuit"] = circuitToJson(segment->forwardNode().circuit);
-        }
-        if(segment->backwardNode().circuit){
-            segmentJson["backward_circuit"] = circuitToJson(segment->backwardNode().circuit);
-        }
-    }
-    
-    return segmentJson;
-}
-
-bool DXAJsonExporter::writeJsonMsgpackToFile(const json &data, const std::string &filePath, bool sortKeys){
-    return JsonUtils::writeJsonMsgpackToFile(data, filePath, sortKeys);
-}
-
 std::string DXAJsonExporter::getBurgersVectorString(const Vector3& burgers){
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3);
     oss << "[" << burgers.x() << " " << burgers.y() << " " << burgers.z() << "]";
     return oss.str();
-}
-
-std::string DXAJsonExporter::getLineDirectionString(const Vector3& direction){
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(3);
-    oss << "⟨" << direction.x() << " " << direction.y() << " " << direction.z() << "⟩";
-    return oss.str();
-}
-
-json DXAJsonExporter::getCentroSymmetryData(
-    const CentroSymmetryEngine& engine,
-    const std::vector<int>& ids
-){
-    json out;
-
-    auto csp = engine.cspProperty();
-    auto hist = engine.histogramCounts();
-
-    const std::size_t n = ids.size();
-    out["metadata"] = {
-        {"count", n},
-        {"histogram_bins", engine.numHistogramBins()},
-        {"histogram_bin_size", engine.histogramBinSize()},
-        {"max_csp", engine.maxCSP()}
-    };
-
-    // per-atom
-    json atoms = json::array();
-    for(std::size_t i = 0; i < n; i++){
-        atoms.push_back({
-            {"id", ids[i]},
-            {"csp", csp ? csp->getDouble(i) : 0.0}
-        });
-    }
-    out["atoms"] = std::move(atoms);
-
-    // histogram
-    json h = json::array();
-    if(hist){
-        for(std::size_t b = 0; b < engine.numHistogramBins(); b++){
-            h.push_back(hist->getInt64(b));
-        }
-    }
-    out["histogram_counts"] = std::move(h);
-
-    out["histogram_interval"] = {
-        {"start", 0.0},
-        {"end", engine.histogramBinSize() * (double)engine.numHistogramBins()}
-    };
-
-    return out;
-}
-
-json DXAJsonExporter::getClusterAnalysisData(
-    const ClusterAnalysisEngine& engine,
-    const std::vector<int>& ids
-){
-    json out;
-
-    auto clusters = engine.particleClusters();
-    auto unwrapped = engine.unwrappedPositions();
-
-    auto clusterSizes = engine.clusterSizes();
-    auto clusterIds = engine.clusterIDs();
-    auto centers = engine.centersOfMass();
-    auto rg = engine.radiiOfGyration();
-    auto gt = engine.gyrationTensors();
-
-    const size_t n = ids.size();
-    const size_t k = engine.numClusters();
-
-    out["metadata"] = {
-        {"count", n},
-        {"cluster_count", k},
-        {"largest_cluster_size", engine.largestClusterSize()},
-        {"has_zero_weight_cluster", engine.hasZeroWeightCluster()}
-    };
-
-    // cluster list
-    json list = json::array();
-    for(size_t ci = 0; ci < k; ci++){
-        json c;
-        c["cluster_id"] = static_cast<int64_t>(ci + 1);
-        c["size"] = clusterSizes ? clusterSizes->getInt64(ci) : 0;
-
-        if(centers){
-            const Point3 p = centers->getPoint3(ci);
-            c["center"] = {p.x(), p.y(), p.z()};
-        }
-
-        if(rg){
-            c["radius_of_gyration"] = rg->getDouble(ci);
-        }
-
-        if(gt){
-            json tensor = json::array();
-            for(int comp = 0; comp < 6; comp++){
-                tensor.push_back(gt->getDoubleComponent(ci, comp));
-            }
-            c["gyration_tensor"] = tensor;
-        }
-
-        list.push_back(c);
-    }
-    out["cluster_list"] = list;
-
-    // per-atom assignments
-    json atoms = json::array();
-    for(size_t i = 0; i < n; i++){
-        json a;
-        a["id"] = ids[i];
-        a["cluster"] = clusters ? clusters->getInt(i) : 0;
-
-        if(unwrapped){
-            const Point3 p = unwrapped->getPoint3(i);
-            a["pos_unwrapped"] = {p.x(), p.y(), p.z()};
-        }
-
-        atoms.push_back(a);
-    }
-    out["atoms"] = atoms;
-
-    return out;
 }
 
 void DXAJsonExporter::exportForStructureIdentification(
@@ -1359,7 +606,7 @@ void DXAJsonExporter::exportForStructureIdentification(
     JsonUtils::writeJsonMsgpackToFile(exportWrapper, outputFilename + "_atoms.msgpack", false);
 
     // also export statistics (now with main_listing convention)
-    writeJsonMsgpackToFile(structureAnalysis.getStructureStatisticsJson(), outputFilename + "_structure_analysis_stats.msgpack");
+    JsonUtils::writeJsonMsgpackToFile(structureAnalysis.getStructureStatisticsJson(), outputFilename + "_structure_analysis_stats.msgpack", false);
 }
 
 json DXAJsonExporter::getNetworkStatistics(const DislocationNetwork* network, double cellVolume){
@@ -1486,75 +733,7 @@ json DXAJsonExporter::getCircuitInformation(const DislocationNetwork* network){
     return circuitInfo;
 }
 
-json DXAJsonExporter::getTopologyInformation(const InterfaceMesh* interfaceMesh){
-    json topology;
-    const auto& vertices = interfaceMesh->vertices();
-    const auto& faces = interfaceMesh->faces();
 
-    std::unordered_set<uint64_t> edgeSet;
-    edgeSet.reserve(faces.size() * 3);
-    for(const auto* face : faces){
-        if(face && face->edges()){
-            auto* edge = face->edges();
-            do{
-                if(edge->vertex1() && edge->vertex2()){
-                    int v1 = edge->vertex1()->index();
-                    int v2 = edge->vertex2()->index();
-                    if(v1 > v2) std::swap(v1, v2);
-                    uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(v1)) << 32)
-                        | static_cast<uint32_t>(v2);
-                    edgeSet.insert(key);
-                }
-                edge = edge->nextFaceEdge();
-            }while(edge && edge != face->edges());
-        }
-    }
-    
-    topology = {
-        {"euler_characteristic", static_cast<int>(vertices.size()) - static_cast<int>(edgeSet.size()) + static_cast<int>(faces.size())},
-        {"average_vertex_degree", calculateAverageVertexDegree(interfaceMesh)},
-        {"genus", (2 - (static_cast<int>(vertices.size()) - static_cast<int>(edgeSet.size()) + static_cast<int>(faces.size()))) / 2},
-        {"mesh_quality", {
-            {"is_completely_good", interfaceMesh->isCompletelyGood()},
-            {"is_completely_bad", interfaceMesh->isCompletelyBad()}
-        }}
-    };
-    
-    return topology;
-}
-
-json DXAJsonExporter::nodeToJson(const DislocationNode* node){
-    json nodeJson;
-    
-    if(!node) return nodeJson;
-    
-    nodeJson = {
-        {"is_dangling", node->isDangling()},
-        {"is_forward_node", node->isForwardNode()},
-        {"is_backward_node", node->isBackwardNode()},
-        {"junction_arms_count", node->countJunctionArms()},
-        {"position", pointToJson(node->position())},
-        {"burgers_vector", vectorToJson(node->burgersVector().localVec())}
-    };
-    
-    return nodeJson;
-}
-
-json DXAJsonExporter::circuitToJson(const BurgersCircuit* circuit){
-    json circuitJson;
-    
-    if(!circuit) return circuitJson;
-    
-    circuitJson = {
-        {"edge_count", circuit->edgeCount},
-        {"is_dangling", circuit->isDangling},
-        {"is_completely_blocked", circuit->isCompletelyBlocked},
-        {"center_position", pointToJson(circuit->calculateCenter())},
-        {"burgers_vector", vectorToJson(circuit->calculateBurgersVector().localVec())}
-    };
-    
-    return circuitJson;
-}
 
 int DXAJsonExporter::countJunctions(const DislocationNetwork* network){
     int junctions = 0;
@@ -1583,88 +762,6 @@ int DXAJsonExporter::countDanglingSegments(const DislocationNetwork* network){
     return dangling;
 }
 
-double DXAJsonExporter::calculateAverageVertexDegree(const InterfaceMesh* interfaceMesh){
-    const auto& vertices = interfaceMesh->vertices();
-    const auto& faces = interfaceMesh->faces();
-    
-    std::map<int, int> vertexDegree;
-    
-    for(size_t i = 0; i < vertices.size(); ++i){
-        vertexDegree[i] = 0;
-    }
-    
-    for(const auto* face : faces){
-        if(face && face->edges()){
-            auto* edge = face->edges();
-            do{
-                if(edge->vertex1() && edge->vertex2()){
-                    vertexDegree[edge->vertex1()->index()]++;
-                    vertexDegree[edge->vertex2()->index()]++;
-                }
-                edge = edge->nextFaceEdge();
-            }while(edge && edge != face->edges());
-        }
-    }
-    
-    double totalDegree = 0.0;
-    for(const auto& pair : vertexDegree){
-        totalDegree += pair.second;
-    }
-    
-    return vertices.empty() ? 0.0 : totalDegree / vertices.size();
-}
-
-json DXAJsonExporter::getDisplacementsData(
-    const DisplacementsEngine& engine,
-    const std::vector<int>& ids
-){
-    json result;
-
-    auto U = engine.displacements();
-    auto Umag = engine.displacementMagnitudes();
-
-    if(!U || !Umag){
-        return result;
-    }
-
-    const size_t n = ids.size();
-    double totalMag = 0.0;
-    double maxMag = 0.0;
-    double minMag = std::numeric_limits<double>::max();
-
-    for(size_t i = 0; i < n; ++i){
-        double m = Umag->getDouble(i);
-        totalMag += m;
-        if(m > maxMag) maxMag = m;
-        if(m < minMag) minMag = m;
-    }
-
-    result["metadata"] = {
-        {"count", n}
-    };
-
-    result["summary"] = {
-        {"average_displacement_magnitude", n > 0 ? totalMag / n : 0.0},
-        {"max_displacement_magnitude", maxMag},
-        {"min_displacement_magnitude", (minMag == std::numeric_limits<double>::max()) ? 0.0 : minMag}
-    };
-
-    json dataArray = json::array();
-    for(size_t i = 0; i < n; ++i){
-        json atom;
-        atom["id"] = ids[i];
-
-        Vector3 u = U->dataVector3()[i];
-        atom["displacement"] = {u.x(), u.y(), u.z()};
-        atom["magnitude"] = Umag->getDouble(i);
-
-        dataArray.push_back(atom);
-    }
-
-    result["data"] = dataArray;
-    return result;
-}
-
 double DXAJsonExporter::calculateAngle(const Vector3& a, const Vector3& b){
     double dot = a.dot(b);
 	double magnitudes = a.length() * b.length();
@@ -1677,39 +774,7 @@ double DXAJsonExporter::calculateAngle(const Vector3& a, const Vector3& b){
     return std::acos(cosAngle) * 180.0 / PI;
 }
 
-json dislocationNetworkToJson(const DislocationNetwork* network){
-    DXAJsonExporter exporter;
-    return exporter.exportDislocationsToJson(network);
 }
-
-json frameToJson(const LammpsParser::Frame& frame, const BurgersLoopBuilder* tracer){
-    DXAJsonExporter exporter;
-    return exporter.getAtomsData(frame, tracer);
-}
-
-}
-// Explicit template instantiations for getMeshData
-template Volt::json Volt::DXAJsonExporter::getMeshData<Volt::HalfEdgeMesh<Volt::InterfaceMeshEdge, Volt::InterfaceMeshFace, Volt::InterfaceMeshVertex>>(
-    const Volt::HalfEdgeMesh<Volt::InterfaceMeshEdge, Volt::InterfaceMeshFace, Volt::InterfaceMeshVertex>& mesh,
-    const Volt::StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
-    const Volt::InterfaceMesh* interfaceMeshForTopology
-);
-
-template Volt::json Volt::DXAJsonExporter::getMeshData<Volt::InterfaceMesh>(
-    const Volt::InterfaceMesh& mesh,
-    const Volt::StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
-    const Volt::InterfaceMesh* interfaceMeshForTopology
-);
-
-template void Volt::DXAJsonExporter::writeMeshMsgpackToFile<Volt::HalfEdgeMesh<Volt::InterfaceMeshEdge, Volt::InterfaceMeshFace, Volt::InterfaceMeshVertex>>(
-    const Volt::HalfEdgeMesh<Volt::InterfaceMeshEdge, Volt::InterfaceMeshFace, Volt::InterfaceMeshVertex>& mesh,
-    const Volt::StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
-    const Volt::InterfaceMesh* interfaceMeshForTopology,
-    const std::string& filePath
-);
 
 template void Volt::DXAJsonExporter::writeMeshMsgpackToFile<Volt::InterfaceMesh>(
     const Volt::InterfaceMesh& mesh,
