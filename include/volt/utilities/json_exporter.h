@@ -12,17 +12,12 @@
 #include <volt/analysis/burgers_circuit.h>
 #include <volt/core/lammps_parser.h>
 #include <volt/math/lin_alg.h>
-#include <volt/atomic_strain_engine.h>
 #include <volt/analysis/analysis_context.h>
-#include <volt/displacements_engine.h>
-#include <volt/cluster_analysis_engine.h>
-#include <volt/centrosymmetry_engine.h>
 
 namespace Volt{
 
 using json = nlohmann::json;
 
-class ElasticStrainEngine;
 class BurgersLoopBuilder;
 
 class DXAJsonExporter{
@@ -49,11 +44,6 @@ public:
         const std::string& outputFilename
     );
 
-    json getCentroSymmetryData(
-        const CentroSymmetryEngine& engine,
-        const std::vector<int>& ids
-    );
-
     json exportClusterGraphToJson(const ClusterGraph* graph);
     json exportDislocationsToJson(const DislocationNetwork* network, bool includeDetailedInfo = false, const SimulationCell* simulationCell = nullptr);
     static inline uint32_t checked_u32_size(std::size_t n){
@@ -71,11 +61,6 @@ public:
         const std::string& filePath
     );
 
-    json getDisplacementsData(
-        const DisplacementsEngine& engine,
-        const std::vector<int>& ids
-    );
-
     json getInterfaceMeshData(
         const InterfaceMesh* interfaceMesh,
         const StructureAnalysis& structureAnalysis,
@@ -83,18 +68,10 @@ public:
     );
     
     json getAtomsData(const LammpsParser::Frame& frame, const BurgersLoopBuilder* tracer, const std::vector<int>* structureTypes = nullptr);
-    json getAtomicStrainData(const AtomicStrainModifier::AtomicStrainEngine& engine, const std::vector<int>& ids);
-    json getElasticStrainData(const ElasticStrainEngine& engine, const std::vector<int>& ids);
-    json getPTMData(const AnalysisContext& context, const std::vector<int>& ids);
     void exportPTMData(const AnalysisContext& context, const std::vector<int>& ids, const std::string& outputFilename);
     json getProcessingTime();
     json getMetadata();
 
-    json getClusterAnalysisData(
-        const ClusterAnalysisEngine& engine,
-        const std::vector<int>& ids
-    );
-    
     json getNetworkStatistics(const DislocationNetwork* network, double cellVolume);
     json getJunctionInformation(const DislocationNetwork* network);
     json getCircuitInformation(const DislocationNetwork* network);

@@ -368,12 +368,7 @@ json DXAJsonExporter::exportDislocationsToJson(
     (void)includeDetailedInfo;
     json dislocations;
     std::vector<const DislocationSegment*> orderedSegments = buildDeterministicSegments(network);
-    
-    dislocations["metadata"] = {
-        {"type", "dislocation_segments"},
-        {"count", static_cast<int>(orderedSegments.size())}
-    };
-    
+
     json dataArray = json::array();
     double totalLength = 0.0;
     int totalPoints = 0;
@@ -382,7 +377,6 @@ json DXAJsonExporter::exportDislocationsToJson(
     int globalChunkId = 0;
 
     auto saveChunk = [&](const std::vector<Point3>& chunk, const DislocationSegment* originalSegment){
-        // if(chunk.size() < 2) return;
         json segmentJson;
         json points = json::array();
 
@@ -400,14 +394,12 @@ json DXAJsonExporter::exportDislocationsToJson(
         segmentJson["num_points"] = chunk.size();
 
         Vector3 burgers = originalSegment->burgersVector.localVec();
-        segmentJson["burgers"] = {
-            {"vector", {burgers.x(), burgers.y(), burgers.z()}},
-		{"magnitude", burgers.length()},
-            {"fractional", getBurgersVectorString(burgers)}
-        };
+        segmentJson["burgers_vector"] = { burgers.x(), burgers.y(), burgers.z() };
+        segmentJson["magnitude"] = burgers.length();
+        segmentJson["fractional"] = getBurgersVectorString(burgers);
 
         dataArray.push_back(segmentJson);
-        
+
         totalLength += chunkLength;
         totalPoints += chunk.size();
         maxLength = std::max(maxLength, chunkLength);
@@ -436,7 +428,6 @@ json DXAJsonExporter::exportDislocationsToJson(
                 saveChunk(currentChunk, segment);
             }
         }else{
-            // No simulation cell: emit raw line points without clipping
             std::vector<Point3> rawChunk(segment->line.begin(), segment->line.end());
             if(!rawChunk.empty()){
                 saveChunk(rawChunk, segment);
@@ -444,23 +435,24 @@ json DXAJsonExporter::exportDislocationsToJson(
         }
     }
 
-    dislocations["metadata"]["count"] = dataArray.size();
-    dislocations["data"] = dataArray;
-    
     if(dataArray.empty()){
         minLength = 0.0;
     }
-    
-    dislocations["summary"] = {
-        {"total_points", totalPoints},
-        {"average_segment_length", dataArray.empty() ? 0.0 : totalLength / dataArray.size()}, 
-        {"max_segment_length", maxLength},
-        {"min_segment_length", minLength},
-        {"total_length", totalLength}
+
+    dislocations["main_listing"] = {
+        { "dislocations", static_cast<int>(dataArray.size()) },
+        { "total_points", totalPoints },
+        { "average_segment_length", dataArray.empty() ? 0.0 : totalLength / dataArray.size() },
+        { "max_segment_length", maxLength },
+        { "min_segment_length", minLength },
+        { "total_length", totalLength }
     };
-    
+    dislocations["sub_listings"] = { { "dislocation_segments", dataArray } };
+    dislocations["export"]["DislocationExporter"]["segments"] = dataArray;
+
     return dislocations;
 }
+
 
 void DXAJsonExporter::writeDislocationsMsgpackToFile(
     const DislocationNetwork* network,
@@ -524,12 +516,9 @@ json DXAJsonExporter::getMeshData(
         exportFaces.push_back(newFaceIndices);
     }
     
-    meshData["metadata"] = {
-        {"count", static_cast<int>(originalFaces.size())},
-        {"components", {
-            {"num_nodes", static_cast<int>(exportPoints.size())},
-            {"num_facets", static_cast<int>(exportFaces.size())}
-        }}
+    meshData["main_listing"] = {
+        {"total_nodes", static_cast<int>(exportPoints.size())},
+        {"total_facets", static_cast<int>(exportFaces.size())}
     };
 
     json points = json::array();
@@ -549,10 +538,12 @@ json DXAJsonExporter::getMeshData(
         });
     }
 
-    meshData["data"] = {
+    meshData["sub_listings"] = {
         {"points", points},
         {"facets", facets}
     };
+    meshData["export"]["MeshExporter"]["vertices"] = points;
+    meshData["export"]["MeshExporter"]["facets"] = facets;
     
     if(includeTopologyInfo && interfaceMeshForTopology != nullptr){
         std::unordered_set<uint64_t> originalEdgeSet;
@@ -827,27 +818,33 @@ void DXAJsonExporter::exportPTMData(
     if(!ptmProp || !corrProp) return;
 
     const bool includeStructureType = context.structureTypes && context.structureTypes->size() >= ids.size();
-    json data;
-    json dataArray = json::array();
+    json perAtom = json::array();
     for(size_t i = 0; i < ids.size(); ++i){
         json atom;
         atom["id"] = ids[i];
-        atom["correspondence"] = static_cast<uint64_t>(corrProp->getInt64(i));
+        atom["correspondences"] = static_cast<uint64_t>(corrProp->getInt64(i));
         if(includeStructureType){
             atom["structure_type"] = context.structureTypes->getInt(i);
         }
         json orient = json::array();
         for(int c = 0; c < 4; ++c) orient.push_back(ptmProp->getDoubleComponent(i, c));
         atom["orientation"] = orient;
-        dataArray.push_back(atom);
+        perAtom.push_back(atom);
     }
-    data["data"] = dataArray;
+
+    json data;
+    data["main_listing"] = {
+        {"total_atoms", static_cast<int>(ids.size())},
+        {"include_structure_type", includeStructureType}
+    };
+    data["per-atom-properties"] = perAtom;
 
     const std::string ptmPath = outputFilename + "_ptm_data.msgpack";
     if(JsonUtils::writeJsonMsgpackToFile(data, ptmPath, false)){
         spdlog::info("PTM data written to {}", ptmPath);
     }
 }
+
 
 void DXAJsonExporter::exportCoreAtoms(
     const LammpsParser::Frame& frame,
@@ -873,8 +870,9 @@ void DXAJsonExporter::exportCoreAtoms(
     if(coreAtomsArray.empty()) return;
 
     json data;
-    data["metadata"]["count"] = coreAtomsArray.size();
-    data["core_atoms"] = coreAtomsArray;
+    data["export"] = json::object();
+    data["export"]["AtomisticExporter"] = json::object();
+    data["export"]["AtomisticExporter"]["Core"] = coreAtomsArray;
 
     if(JsonUtils::writeJsonMsgpackToFile(data, outputFilename, false)){
         spdlog::info("Core atoms data written to {} ({} atoms)", outputFilename, coreAtomsArray.size());
@@ -1353,9 +1351,14 @@ void DXAJsonExporter::exportForStructureIdentification(
         }
         atomsByStructure[names[st]] = atomsArray;
     }
-    JsonUtils::writeJsonMsgpackToFile(atomsByStructure, outputFilename + "_atoms.msgpack", false);
+    
+    json exportWrapper;
+    exportWrapper["export"] = json::object();
+    exportWrapper["export"]["AtomisticExporter"] = atomsByStructure;
+    
+    JsonUtils::writeJsonMsgpackToFile(exportWrapper, outputFilename + "_atoms.msgpack", false);
 
-    // also export statistics
+    // also export statistics (now with main_listing convention)
     writeJsonMsgpackToFile(structureAnalysis.getStructureStatisticsJson(), outputFilename + "_structure_analysis_stats.msgpack");
 }
 
