@@ -605,8 +605,9 @@ void DXAJsonExporter::exportForStructureIdentification(
     
     JsonUtils::writeJsonMsgpackToFile(exportWrapper, outputFilename + "_atoms.msgpack", false);
 
-    // also export statistics (now with main_listing convention)
-    JsonUtils::writeJsonMsgpackToFile(structureAnalysis.getStructureStatisticsJson(), outputFilename + "_structure_analysis_stats.msgpack", false);
+    json structureStats;
+    structureStats["main_listing"] = structureAnalysis.buildMainListing();
+    JsonUtils::writeJsonMsgpackToFile(structureStats, outputFilename + "_structure_analysis_stats.msgpack", false);
 }
 
 json DXAJsonExporter::getNetworkStatistics(const DislocationNetwork* network, double cellVolume){
