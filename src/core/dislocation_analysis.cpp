@@ -321,7 +321,7 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             PROFILE("Streaming Atoms MsgPack");
             _jsonExporter.exportForStructureIdentification(frame, interfaceMesh.structureAnalysis(), outputFile);
         }
-        mark_stage("stream_atoms_msgpack");
+        mark_stage("stream_structure_stats_msgpack");
         {
             PROFILE("Streaming Dislocations MsgPack");
             _jsonExporter.writeDislocationsMsgpackToFile(

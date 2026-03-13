@@ -508,105 +508,76 @@ void DXAJsonExporter::exportForStructureIdentification(
     const std::string& outputFilename
 ){
     const size_t N = frame.natoms;
-    constexpr int K = static_cast<int>(StructureType::NUM_STRUCTURE_TYPES);
 
-    assert(frame.ids.size() == N);
-
-    std::vector<std::string> names(K);
-    for(int st = 0; st < K; st++){
-        names[st] = structureAnalysis.getStructureTypeName(st);
+    std::vector<int> atomStructureTypes(N);
+    for(size_t i = 0; i < N; ++i){
+        atomStructureTypes[i] = static_cast<int>(
+            structureAnalysis.context().structureTypes->getInt(static_cast<int>(i))
+        );
     }
 
-    std::vector<uint8_t> stOfAtom(N);
-    std::vector<size_t> counts(K, 0);
-    using StructureCounts = std::array<size_t, K>;
-    const size_t chunkSize = 16384;
-    const size_t chunkCount = (N + chunkSize - 1) / chunkSize;
-    std::vector<StructureCounts> chunkCounts(chunkCount);
+    json perAtomProperties = json::array();
+    if(structureAnalysis.usingPTM()){
+        const auto& ctx = structureAnalysis.context();
+        const auto ptmOrientation = ctx.ptmOrientation;
+        const auto correspondences = ctx.correspondencesCode;
 
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, chunkCount, 16),
-        [&](const tbb::blocked_range<size_t>& r){
-        for(size_t chunkIdx = r.begin(); chunkIdx < r.end(); ++chunkIdx){
-            auto& localCounts = chunkCounts[chunkIdx];
-            localCounts.fill(0);
+        for(size_t i = 0; i < N; ++i){
+            int atomId = i < frame.ids.size()
+                ? frame.ids[i]
+                : static_cast<int>(i);
 
-            const size_t begin = chunkIdx * chunkSize;
-            const size_t end = std::min(N, begin + chunkSize);
-            for(size_t i = begin; i < end; ++i){
-                const int raw = structureAnalysis.context().structureTypes->getInt(static_cast<int>(i));
-                const int st = (0 <= raw && raw < K) ? raw : 0;
-                stOfAtom[i] = static_cast<uint8_t>(st);
-                localCounts[static_cast<size_t>(st)]++;
+            json atom;
+            atom["id"] = atomId;
+            atom["structure_type"] = atomStructureTypes[i];
+
+            if(i < static_cast<size_t>(frame.positions.size())){
+                const auto& pos = frame.positions[i];
+                atom["pos"] = {pos.x(), pos.y(), pos.z()};
+            }else{
+                atom["pos"] = {0.0, 0.0, 0.0};
             }
-        }
-    });
 
-    for(size_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx){
-        for(int st = 0; st < K; ++st){
-            counts[static_cast<size_t>(st)] += chunkCounts[chunkIdx][static_cast<size_t>(st)];
-        }
-    }
-
-    std::vector<StructureCounts> chunkOffsets(chunkCount);
-    StructureCounts runningOffsets{};
-    runningOffsets.fill(0);
-    for(size_t chunkIdx = 0; chunkIdx < chunkCount; ++chunkIdx){
-        chunkOffsets[chunkIdx] = runningOffsets;
-        for(int st = 0; st < K; ++st){
-            runningOffsets[static_cast<size_t>(st)] += chunkCounts[chunkIdx][static_cast<size_t>(st)];
-        }
-    }
-
-    std::vector<std::vector<uint32_t>> structureAtomIndices(K);
-    for(int st = 0; st < K; ++st){
-        structureAtomIndices[static_cast<size_t>(st)].resize(counts[static_cast<size_t>(st)]);
-    }
-
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, chunkCount, 16),
-        [&](const tbb::blocked_range<size_t>& r){
-        for(size_t chunkIdx = r.begin(); chunkIdx < r.end(); ++chunkIdx){
-            auto writeOffsets = chunkOffsets[chunkIdx];
-            const size_t begin = chunkIdx * chunkSize;
-            const size_t end = std::min(N, begin + chunkSize);
-
-            for(size_t i = begin; i < end; ++i){
-                const size_t st = static_cast<size_t>(stOfAtom[i]);
-                structureAtomIndices[st][writeOffsets[st]++] = static_cast<uint32_t>(i);
+            if(correspondences){
+                atom["correspondence"] = static_cast<uint64_t>(correspondences->getInt64(i));
             }
-        }
-    });
 
-    std::vector<int> structureOrder;
-    structureOrder.reserve(K);
-    for(int st = 0; st < K; st++){
-        if(counts[st] > 0) structureOrder.push_back(st);
-    }
-    std::sort(structureOrder.begin(), structureOrder.end(), [&](int a, int b){
-        return names[a] < names[b];
-    });
+            if(ptmOrientation){
+                atom["orientation"] = {
+                    ptmOrientation->getDoubleComponent(i, 0),
+                    ptmOrientation->getDoubleComponent(i, 1),
+                    ptmOrientation->getDoubleComponent(i, 2),
+                    ptmOrientation->getDoubleComponent(i, 3)
+                };
+            }
 
-    json atomsByStructure;
-    for(int st : structureOrder){
-        json atomsArray = json::array();
-        for(uint32_t atomIndexRaw : structureAtomIndices[static_cast<size_t>(st)]){
-            const size_t atomIndex = static_cast<size_t>(atomIndexRaw);
-            const Point3& pos = frame.positions[atomIndex];
-            atomsArray.push_back({
-                {"id", frame.ids[atomIndex]},
-                {"pos", { pos.x(), pos.y(), pos.z() }}
-            });
+            perAtomProperties.push_back(atom);
         }
-        atomsByStructure[names[st]] = atomsArray;
+    }else{
+        for(size_t i = 0; i < N; ++i){
+            int atomId = i < frame.ids.size()
+                ? frame.ids[i]
+                : static_cast<int>(i);
+
+            json atom;
+            atom["id"] = atomId;
+            atom["structure_type"] = atomStructureTypes[i];
+            atom["structure_name"] = structureAnalysis.getStructureTypeName(atomStructureTypes[i]);
+
+            if(i < static_cast<size_t>(frame.positions.size())){
+                const auto& pos = frame.positions[i];
+                atom["pos"] = {pos.x(), pos.y(), pos.z()};
+            }else{
+                atom["pos"] = {0.0, 0.0, 0.0};
+            }
+
+            perAtomProperties.push_back(atom);
+        }
     }
-    
-    json exportWrapper;
-    exportWrapper["export"] = json::object();
-    exportWrapper["export"]["AtomisticExporter"] = atomsByStructure;
-    
-    JsonUtils::writeJsonMsgpackToFile(exportWrapper, outputFilename + "_atoms.msgpack", false);
 
     json structureStats;
     structureStats["main_listing"] = structureAnalysis.buildMainListing();
+    structureStats["per-atom-properties"] = perAtomProperties;
     JsonUtils::writeJsonMsgpackToFile(structureStats, outputFilename + "_structure_analysis_stats.msgpack", false);
 }
 
