@@ -1,7 +1,7 @@
 #include <volt/cli/common.h>
 #include <volt/core/dislocation_analysis.h>
 #include <volt/structures/crystal_structure_types.h>
-#include <tbb/info.h>
+#include <oneapi/tbb/info.h>
 #include <algorithm>
 #include <fstream>
 #include <set>
