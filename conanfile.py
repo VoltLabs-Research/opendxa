@@ -8,7 +8,12 @@ class OpenDXAConan(ConanFile):
     package_type = "application"
     license = "MIT"
     settings = "os", "arch", "compiler", "build_type"
+    default_options = {
+        "hwloc/*:shared": True,
+    }
     requires = (
+        "boost/1.88.0",
+        "onetbb/2021.12.0",
         "coretoolkit/1.0.0",
         "structure-identification/1.0.0",
         "spdlog/1.14.1",

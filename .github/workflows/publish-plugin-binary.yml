@@ -17,4 +17,6 @@ jobs:
     uses: VoltLabs-Research/CoreToolkit/.github/workflows/build-plugin-binary.yml@main
     with:
       plugin_name: ${{ github.event.repository.name }}
+      dependency_repos: |
+        StructureIdentification
     secrets: inherit
