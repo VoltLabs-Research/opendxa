@@ -61,8 +61,6 @@ set_target_properties(${PROJECT_NAME}_lib PROPERTIES POSITION_INDEPENDENT_CODE O
 
 target_include_directories(${PROJECT_NAME}_lib PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_precompile_headers(${PROJECT_NAME}_lib PRIVATE <volt/core/volt.h>)
-target_compile_definitions(${PROJECT_NAME}_lib PUBLIC
-)
 target_link_libraries(${PROJECT_NAME}_lib PUBLIC
 	${OPENDXA_BOOST_TARGET}
 	TBB::tbb
@@ -77,8 +75,6 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_precompile_headers(${PROJECT_NAME} PRIVATE <volt/core/volt.h>)
 target_link_libraries(${PROJECT_NAME} PRIVATE
 	${PROJECT_NAME}_lib
-	${OPENDXA_BOOST_TARGET}
-	TBB::tbb
 )
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 
