@@ -11,6 +11,7 @@
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
 #include <string_view>
+#include <algorithm>
 
 namespace Volt{
 
@@ -322,6 +323,57 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             _jsonExporter.exportForStructureIdentification(frame, interfaceMesh.structureAnalysis(), outputFile);
         }
         mark_stage("stream_structure_stats_msgpack");
+
+        // atoms.msgpack: atoms grouped by structure type for AtomisticExporter
+        {
+            PROFILE("Streaming Atoms By Structure Type MsgPack");
+            const auto& sa = interfaceMesh.structureAnalysis();
+            constexpr int K = static_cast<int>(StructureType::NUM_STRUCTURE_TYPES);
+
+            std::vector<std::string> names(K);
+            for(int st = 0; st < K; st++){
+                names[st] = sa.getStructureTypeName(st);
+            }
+
+            std::vector<std::vector<size_t>> structureAtomIndices(K);
+            for(size_t i = 0; i < static_cast<size_t>(frame.natoms); ++i){
+                const int raw = sa.context().structureTypes->getInt(static_cast<int>(i));
+                const int st = (0 <= raw && raw < K) ? raw : 0;
+                structureAtomIndices[static_cast<size_t>(st)].push_back(i);
+            }
+
+            std::vector<int> structureOrder;
+            structureOrder.reserve(K);
+            for(int st = 0; st < K; st++){
+                if(!structureAtomIndices[static_cast<size_t>(st)].empty()){
+                    structureOrder.push_back(st);
+                }
+            }
+            std::sort(structureOrder.begin(), structureOrder.end(), [&](int a, int b){
+                return names[a] < names[b];
+            });
+
+            json atomsByStructure;
+            for(int st : structureOrder){
+                json atomsArray = json::array();
+                for(size_t atomIndex : structureAtomIndices[static_cast<size_t>(st)]){
+                    const auto& pos = frame.positions[atomIndex];
+                    atomsArray.push_back({
+                        {"id", frame.ids[atomIndex]},
+                        {"pos", { pos.x(), pos.y(), pos.z() }}
+                    });
+                }
+                atomsByStructure[names[st]] = atomsArray;
+            }
+
+            json exportWrapper;
+            exportWrapper["export"] = json::object();
+            exportWrapper["export"]["AtomisticExporter"] = atomsByStructure;
+
+            const std::string atomsPath = outputFile + "_atoms.msgpack";
+            JsonUtils::writeJsonMsgpackToFile(exportWrapper, atomsPath, false);
+        }
+        mark_stage("stream_atoms_msgpack");
         {
             PROFILE("Streaming Dislocations MsgPack");
             _jsonExporter.writeDislocationsMsgpackToFile(
