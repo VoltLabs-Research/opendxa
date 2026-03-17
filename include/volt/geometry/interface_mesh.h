@@ -13,6 +13,8 @@ class BurgersLoopBuilder;
 
 struct InterfaceMeshVertex{
     // Thread-local state used during Burgers circuit search
+    BurgersCircuitSearchStruct* burgersSearchStruct = nullptr;
+    bool visited = false;
 };
 
 struct InterfaceMeshFace{

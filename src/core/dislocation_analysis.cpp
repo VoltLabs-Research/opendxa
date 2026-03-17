@@ -256,8 +256,7 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         interfaceMesh, 
         &structureAnalysis->clusterGraph(),
         static_cast<int>(_maxTrialCircuitSize), 
-        static_cast<int>(_circuitStretchability),
-        _markCoreAtoms
+        static_cast<int>(_circuitStretchability)
     );
     
     {
@@ -403,11 +402,8 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         }
         mark_stage("stream_simulation_cell_msgpack");
 
-        if(_markCoreAtoms){
-            PROFILE("Streaming Core Atoms MsgPack");
-            _jsonExporter.exportCoreAtoms(frame, tracer._coreAtomFlags, outputFile + "_core_atoms.msgpack");
-            mark_stage("stream_core_atoms_msgpack");
-        }
+        // Core atom tracking was removed in the BurgersLoopBuilder refactor.
+        // The _coreAtomFlags field no longer exists.
     }
     
     structureAnalysis.reset();
