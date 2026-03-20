@@ -1,5 +1,6 @@
 #include <volt/geometry/interface_mesh.h>
 #include <volt/analysis/burgers_loop_builder.h>
+#include <volt/coordination_structures.h>
 #include <volt/geometry/manifold_construction_helper.h>
 #include <algorithm>
 #include <array>

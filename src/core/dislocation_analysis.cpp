@@ -76,20 +76,9 @@ void DislocationAnalysis::setIdentificationMode(StructureAnalysis::Mode identifi
 
 json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::string& outputFile){
     auto start_time = std::chrono::high_resolution_clock::now();
-    auto stage_start = start_time;
     spdlog::debug("Processing frame {} with {} atoms", frame.timestep, frame.natoms);
     
     json result;
-    json stage_metrics = json::array();
-    auto mark_stage = [&](std::string_view name){
-        const auto now = std::chrono::high_resolution_clock::now();
-        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - stage_start).count();
-        stage_metrics.push_back({
-            {"stage", name},
-            {"elapsed_ms", elapsed}
-        });
-        stage_start = now;
-    };
 
     if(frame.natoms <= 0){
         return AnalysisResult::failure("Invalid number of atoms: " + std::to_string(frame.natoms));
@@ -107,7 +96,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             return AnalysisResult::failure("Failed to create position property");
         }
     }
-    mark_stage("create_position_property");
 
     if(!FrameAdapter::validateSimulationCell(frame.simulationCell)){
         return AnalysisResult::failure("Invalid simulation cell");
@@ -137,13 +125,16 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             _rmsd
         );
     }
-    mark_stage("structure_analysis_setup");
     
     {
         PROFILE("Identify Structures");
-        structureAnalysis->identifyStructures();
+        if(structureAnalysis->usingPTM()){
+            structureAnalysis->determineLocalStructuresWithPTM();
+            structureAnalysis->computeMaximumNeighborDistanceFromPTM();
+        }else{
+            structureAnalysis->identifyStructuresCNA();
+        }
     }
-    mark_stage("identify_structures");
 
     std::vector<int> extractedStructureTypes;
     if(outputFile.empty()){
@@ -155,7 +146,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
                 }
             });
     }
-    mark_stage("extract_structure_types");
 
     // If identification mode is PTM, export PTM data
     if(!outputFile.empty() && _identificationMode == StructureAnalysis::Mode::PTM){
@@ -164,16 +154,13 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             frame.ids,
             outputFile
         );
-        mark_stage("export_ptm");
     }
 
     // If structure identification only is requested
     if(_structureIdentificationOnly && !outputFile.empty()){
         _jsonExporter.exportForStructureIdentification(frame, *structureAnalysis, outputFile);
-        mark_stage("structure_identification_only_export");
 
         result["is_failed"] = false;
-        result["stage_metrics"] = std::move(stage_metrics);
         
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
@@ -189,19 +176,16 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         PROFILE("Build Clusters");
         clusterConnector.buildClusters();
     }
-    mark_stage("build_clusters");
 
     {
         PROFILE("Connect Clusters");
         clusterConnector.connectClusters();
     }
-    mark_stage("connect_clusters");
 
     {
         PROFILE("Form Super Clusters");
         clusterConnector.formSuperClusters();
     }
-    mark_stage("form_super_clusters");
 
     DelaunayTessellation tessellation;
     double ghostLayerSize;
@@ -217,26 +201,22 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             nullptr
         );
     }
-    mark_stage("delaunay_tessellation");
 
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
     {
         PROFILE("Elastic Mapping - Generate Edges");
         elasticMap.generateTessellationEdges();
     }
-    mark_stage("elastic_generate_edges");
 
     {
         PROFILE("Elastic Mapping - Assign Vertices");
         elasticMap.assignVerticesToClusters();
     }
-    mark_stage("elastic_assign_vertices");
 
     {
         PROFILE("Elastic Mapping - Assign Ideal Vectors");
         elasticMap.assignIdealVectorsToEdges(false, 4);
     }
-    mark_stage("elastic_assign_ideal_vectors");
 
     elasticMap.shrinkVertexStorage();
     
@@ -247,7 +227,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         PROFILE("InterfaceMesh - Create Mesh");
         interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance());
     }
-    mark_stage("interface_mesh_create");
 
     elasticMap.releaseCaches();
     tessellation.releaseMemory();
@@ -263,13 +242,11 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         PROFILE("Burgers Loop Builder - Trace Dislocation Segments");
         tracer.traceDislocationSegments();
     }
-    mark_stage("trace_dislocation_segments");
 
     {
         PROFILE("Burgers Loop Builder - Finish Dislocation Segments");
         tracer.finishDislocationSegments(_inputCrystalStructure);
     }
-    mark_stage("finish_dislocation_segments");
 
     if(!outputFile.empty()){
         PROFILE("Streaming Defect Mesh MsgPack");
@@ -280,7 +257,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             true,
             outputFile + "_defect_mesh.msgpack"
         );
-        mark_stage("stream_defect_mesh_msgpack");
     }
 
     DislocationNetwork& network = tracer.network();
@@ -292,7 +268,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
         PROFILE("Post Processing - Smooth Vertices & Smooth Dislocation Lines");
         network.smoothDislocationLines(_lineSmoothingLevel, _linePointInterval);
     }
-    mark_stage("smooth_dislocation_lines");
 
     double totalLineLength = 0.0;
     const auto& segments = network.segments();
@@ -321,7 +296,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             PROFILE("Streaming Atoms MsgPack");
             _jsonExporter.exportForStructureIdentification(frame, interfaceMesh.structureAnalysis(), outputFile);
         }
-        mark_stage("stream_structure_stats_msgpack");
 
         // atoms.msgpack: atoms grouped by structure type for AtomisticExporter
         {
@@ -372,7 +346,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             const std::string atomsPath = outputFile + "_atoms.msgpack";
             JsonUtils::writeJsonMsgpackToFile(exportWrapper, atomsPath, false);
         }
-        mark_stage("stream_atoms_msgpack");
         {
             PROFILE("Streaming Dislocations MsgPack");
             _jsonExporter.writeDislocationsMsgpackToFile(
@@ -381,7 +354,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
                 outputFile + "_dislocations.msgpack"
             );
         }
-        mark_stage("stream_dislocations_msgpack");
 
         {
             PROFILE("Streaming Interface Mesh MsgPack");
@@ -393,17 +365,12 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
                 outputFile + "_interface_mesh.msgpack"
             );
         }
-        mark_stage("stream_interface_mesh_msgpack");
         
         {
             PROFILE("Streaming Simulation Cell MsgPack");
             auto simCellInfo = _jsonExporter.getExtendedSimulationCellInfo(frame.simulationCell);
             JsonUtils::writeJsonMsgpackToFile(simCellInfo, outputFile + "_simulation_cell.msgpack", false);
         }
-        mark_stage("stream_simulation_cell_msgpack");
-
-        // Core atom tracking was removed in the BurgersLoopBuilder refactor.
-        // The _coreAtomFlags field no longer exists.
     }
     
     structureAnalysis.reset();
@@ -413,7 +380,6 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
     result["total_time"] = duration;
-    result["stage_metrics"] = std::move(stage_metrics);
 
     spdlog::debug("Total time {} ms ", duration);
 
