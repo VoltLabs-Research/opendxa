@@ -15,6 +15,17 @@
 
 namespace Volt {
 
+namespace {
+
+Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
+    if(burgersVector.cluster() == nullptr){
+        return burgersVector.localVec();
+    }
+    return burgersVector.toSpatialVector();
+}
+
+}  // namespace
+
 void clipDislocationLine(
     const std::vector<Point3>& line,
     const SimulationCell& simulationCell,
@@ -134,10 +145,19 @@ json DXAJsonExporter::exportDislocationsToJson(
         segmentJson["length"] = chunkLength;
         segmentJson["num_points"] = chunk.size();
 
-        Vector3 burgers = originalSegment->burgersVector.localVec();
-        segmentJson["burgers_vector"] = { burgers.x(), burgers.y(), burgers.z() };
-        segmentJson["magnitude"] = burgers.length();
-        segmentJson["fractional"] = getBurgersVectorString(burgers);
+        const Vector3 burgersLocal = originalSegment->burgersVector.localVec();
+        const Vector3 burgersGlobal = getGlobalBurgersVector(originalSegment->burgersVector);
+        segmentJson["burgers_vector"] = { burgersLocal.x(), burgersLocal.y(), burgersLocal.z() };
+        segmentJson["burgers_vector_local"] = { burgersLocal.x(), burgersLocal.y(), burgersLocal.z() };
+        segmentJson["burgers_vector_global"] = { burgersGlobal.x(), burgersGlobal.y(), burgersGlobal.z() };
+        segmentJson["burgers"] = {
+            {"vector", { burgersLocal.x(), burgersLocal.y(), burgersLocal.z() }},
+            {"vector_local", { burgersLocal.x(), burgersLocal.y(), burgersLocal.z() }},
+            {"vector_global", { burgersGlobal.x(), burgersGlobal.y(), burgersGlobal.z() }},
+            {"magnitude", burgersLocal.length()}
+        };
+        segmentJson["magnitude"] = burgersLocal.length();
+        segmentJson["fractional"] = getBurgersVectorString(burgersLocal);
 
         dataArray.push_back(segmentJson);
 
