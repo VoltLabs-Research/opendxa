@@ -5,7 +5,7 @@ from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
 class OpenDXAConan(ConanFile):
     name = "opendxa"
     version = "1.0.0"
-    package_type = "application"
+    package_type = "static-library"
     license = "MIT"
     settings = "os", "arch", "compiler", "build_type"
     default_options = {"hwloc/*:shared": True}
@@ -36,3 +36,17 @@ class OpenDXAConan(ConanFile):
     def package(self):
         cmake = CMake(self)
         cmake.install()
+
+    def package_info(self):
+        self.cpp_info.set_property("cmake_target_name", "opendxa::opendxa")
+        self.cpp_info.libs = ["opendxa_lib"]
+        self.cpp_info.requires = [
+            "boost::headers",
+            "onetbb::onetbb",
+            "coretoolkit::coretoolkit",
+            "structure-identification::structure-identification",
+            "common-neighbor-analysis::common-neighbor-analysis",
+            "polyhedral-template-matching::polyhedral-template-matching",
+            "nlohmann_json::nlohmann_json",
+            "spdlog::spdlog",
+        ]
