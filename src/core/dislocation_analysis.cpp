@@ -80,6 +80,10 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
     
     json result;
 
+    if(_identificationMode == StructureAnalysis::Mode::CNA && _inputCrystalStructure == LATTICE_SC){
+        return AnalysisResult::failure("CNA does not support SC. Use PTM for simple cubic crystals.");
+    }
+
     if(frame.natoms <= 0){
         return AnalysisResult::failure("Invalid number of atoms: " + std::to_string(frame.natoms));
     }
