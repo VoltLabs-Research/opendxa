@@ -351,6 +351,17 @@ json DislocationAnalysis::compute(const LammpsParser::Frame &frame, const std::s
             JsonUtils::writeJsonMsgpackToFile(exportWrapper, atomsPath, false);
         }
         {
+            PROFILE("Streaming Atoms Around Dislocations MsgPack");
+            const double surroundingAtomRadius = 1.5 * interfaceMesh.structureAnalysis().maximumNeighborDistance();
+            _jsonExporter.exportAtomsAroundDislocations(
+                frame,
+                network,
+                interfaceMesh.structureAnalysis(),
+                surroundingAtomRadius,
+                outputFile + "_dislocation_surrounding_atoms.msgpack"
+            );
+        }
+        {
             PROFILE("Streaming Dislocations MsgPack");
             _jsonExporter.writeDislocationsMsgpackToFile(
                 &network,

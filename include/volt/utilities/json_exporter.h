@@ -54,6 +54,14 @@ public:
         const std::string& outputFilename
     );
 
+    void exportAtomsAroundDislocations(
+        const LammpsParser::Frame& frame,
+        const DislocationNetwork& network,
+        const StructureAnalysis& structureAnalysis,
+        double shellRadius,
+        const std::string& outputFilename
+    );
+
     template <typename MeshType>
     json getMeshData(
         const MeshType& mesh,

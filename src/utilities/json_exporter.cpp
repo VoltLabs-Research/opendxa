@@ -8,6 +8,7 @@
 #include <cmath>
 #include <array>
 #include <cstdint>
+#include <map>
 #include <volt/utilities/json_utils.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
@@ -16,6 +17,11 @@
 namespace Volt {
 
 namespace {
+
+struct DislocationLineEdge {
+    Point3 start;
+    Point3 end;
+};
 
 Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
     if(burgersVector.cluster() == nullptr){
@@ -37,6 +43,31 @@ json wrapSimulationCellInfoJson(const SimulationCell& cell, json&& cellJson) {
         }},
         {"sub_listings", {{"simulation_cell", std::move(cellJson)}}}
     };
+}
+
+double squaredDistancePointToSegmentPbc(
+    const Point3& point,
+    const Point3& start,
+    const Point3& end,
+    const SimulationCell& simulationCell
+) {
+    const Point3 wrappedStart = point + simulationCell.wrapVector(start - point);
+    const Point3 wrappedEnd = wrappedStart + simulationCell.wrapVector(end - wrappedStart);
+    const Vector3 segment = wrappedEnd - wrappedStart;
+    const double segmentLengthSquared = segment.squaredLength();
+
+    if(segmentLengthSquared <= 1e-20) {
+        return (point - wrappedStart).squaredLength();
+    }
+
+    const double projection = std::clamp(
+        (point - wrappedStart).dot(segment) / segmentLengthSquared,
+        0.0,
+        1.0
+    );
+    const Point3 closestPoint = wrappedStart + (segment * projection);
+
+    return (point - closestPoint).squaredLength();
 }
 
 }  // namespace
@@ -448,6 +479,130 @@ void DXAJsonExporter::exportCoreAtoms(
 
     if(JsonUtils::writeJsonMsgpackToFile(data, outputFilename, false)){
         spdlog::info("Core atoms data written to {} ({} atoms)", outputFilename, coreAtomsArray.size());
+    }
+}
+
+void DXAJsonExporter::exportAtomsAroundDislocations(
+    const LammpsParser::Frame& frame,
+    const DislocationNetwork& network,
+    const StructureAnalysis& structureAnalysis,
+    double shellRadius,
+    const std::string& outputFilename
+){
+    if(shellRadius <= 0.0 || frame.natoms <= 0 || frame.positions.empty()) {
+        return;
+    }
+
+    std::vector<DislocationLineEdge> lineEdges;
+    for(const auto* segment : network.segments()) {
+        if(!segment || segment->isDegenerate()) {
+            continue;
+        }
+
+        for(size_t pointIndex = 1; pointIndex < segment->line.size(); ++pointIndex) {
+            const Point3& start = segment->line[pointIndex - 1];
+            const Point3& end = segment->line[pointIndex];
+            if((end - start).squaredLength() <= 1e-20) {
+                continue;
+            }
+
+            lineEdges.push_back({start, end});
+        }
+    }
+
+    if(lineEdges.empty()) {
+        return;
+    }
+
+    const size_t atomCount = std::min(
+        static_cast<size_t>(frame.natoms),
+        static_cast<size_t>(frame.positions.size())
+    );
+    const double shellRadiusSquared = shellRadius * shellRadius;
+    const SimulationCell& simulationCell = frame.simulationCell;
+    std::vector<uint8_t> selectedAtomFlags(atomCount, 0);
+
+    tbb::parallel_for(
+        tbb::blocked_range<size_t>(0, atomCount),
+        [&](const tbb::blocked_range<size_t>& range) {
+            for(size_t atomIndex = range.begin(); atomIndex < range.end(); ++atomIndex) {
+                const Point3& atomPosition = frame.positions[atomIndex];
+
+                for(const auto& edge : lineEdges) {
+                    if(
+                        squaredDistancePointToSegmentPbc(
+                            atomPosition,
+                            edge.start,
+                            edge.end,
+                            simulationCell
+                        ) <= shellRadiusSquared
+                    ) {
+                        selectedAtomFlags[atomIndex] = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    );
+
+    std::map<std::string, json> groupedAtoms;
+    size_t selectedAtomCount = 0;
+    const auto* structureTypes = structureAnalysis.context().structureTypes;
+
+    for(size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex) {
+        if(selectedAtomFlags[atomIndex] == 0) {
+            continue;
+        }
+
+        int structureType = 0;
+        if(structureTypes && atomIndex < static_cast<size_t>(structureTypes->size())) {
+            structureType = structureTypes->getInt(static_cast<int>(atomIndex));
+        }
+
+        std::string structureName = structureAnalysis.getStructureTypeName(structureType);
+        if(structureName.empty()) {
+            structureName = "Unknown";
+        }
+
+        const int atomId = atomIndex < frame.ids.size()
+            ? frame.ids[atomIndex]
+            : static_cast<int>(atomIndex);
+        const auto& pos = frame.positions[atomIndex];
+
+        groupedAtoms[structureName].push_back({
+            {"id", atomId},
+            {"pos", {pos.x(), pos.y(), pos.z()}},
+            {"structure_type", structureType}
+        });
+        selectedAtomCount++;
+    }
+
+    if(selectedAtomCount == 0) {
+        return;
+    }
+
+    json atomsByStructure = json::object();
+    for(auto& [structureName, atoms] : groupedAtoms) {
+        atomsByStructure[structureName] = std::move(atoms);
+    }
+
+    json data;
+    data["main_listing"] = {
+        {"total_atoms", static_cast<int>(selectedAtomCount)},
+        {"structure_groups", static_cast<int>(groupedAtoms.size())},
+        {"shell_radius", shellRadius}
+    };
+    data["sub_listings"] = atomsByStructure;
+    data["export"] = json::object();
+    data["export"]["AtomisticExporter"] = atomsByStructure;
+
+    if(JsonUtils::writeJsonMsgpackToFile(data, outputFilename, false)) {
+        spdlog::info(
+            "Atoms around dislocations written to {} ({} atoms, radius={})",
+            outputFilename,
+            selectedAtomCount,
+            shellRadius
+        );
     }
 }
 
