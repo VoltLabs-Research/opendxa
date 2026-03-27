@@ -1,5 +1,5 @@
 #include <volt/core/volt.h>
-#include <volt/structures/dislocation_network.h>
+#include <volt/helpers/dislocation_network.h>
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
 

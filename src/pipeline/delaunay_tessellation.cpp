@@ -1,5 +1,5 @@
 #include <volt/core/volt.h>
-#include <volt/geometry/delaunay_tessellation.h>
+#include <volt/pipeline/delaunay_tessellation.h>
 
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_real.hpp>

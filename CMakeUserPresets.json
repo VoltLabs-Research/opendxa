@@ -4,6 +4,7 @@
         "conan": {}
     },
     "include": [
-        "../../../tmp/opendxa-build/build/Release/generators/CMakePresets.json"
+        "build-local/build/Release/build/Release/generators/CMakePresets.json",
+        "build-local/build/Release/generators/CMakePresets.json"
     ]
 }

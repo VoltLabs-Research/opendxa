@@ -14,8 +14,6 @@ class OpenDXAConan(ConanFile):
         "onetbb/2021.12.0",
         "coretoolkit/1.0.0",
         "structure-identification/1.0.0",
-        "common-neighbor-analysis/1.0.0",
-        "polyhedral-template-matching/1.0.0",
         "spdlog/1.14.1",
         "nlohmann_json/3.11.3",
     )
@@ -48,8 +46,6 @@ class OpenDXAConan(ConanFile):
             "onetbb::onetbb",
             "coretoolkit::coretoolkit",
             "structure-identification::structure-identification",
-            "common-neighbor-analysis::common-neighbor-analysis",
-            "polyhedral-template-matching::polyhedral-template-matching",
             "nlohmann_json::nlohmann_json",
             "spdlog::spdlog",
         ]

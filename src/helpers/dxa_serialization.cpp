@@ -1,6 +1,7 @@
-#include <volt/utilities/json_exporter.h>
-#include <volt/analysis/burgers_circuit.h>
-#include <volt/analysis/burgers_loop_builder.h>
+#include <volt/helpers/dxa_serialization.h>
+#include <volt/helpers/burgers_circuit.h>
+#include <cassert>
+#include <functional>
 #include <iomanip>
 #include <numeric>
 #include <unordered_set>
@@ -10,18 +11,12 @@
 #include <cstdint>
 #include <map>
 #include <volt/utilities/json_utils.h>
-#include <tbb/parallel_for.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
 
-namespace Volt {
+namespace Volt::DxaSerialization {
 
 namespace {
-
-struct DislocationLineEdge {
-    Point3 start;
-    Point3 end;
-};
 
 Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
     if(burgersVector.cluster() == nullptr){
@@ -30,47 +25,14 @@ Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
     return burgersVector.toSpatialVector();
 }
 
-json wrapSimulationCellInfoJson(const SimulationCell& cell, json&& cellJson) {
-    const auto& pbcFlags = cell.pbcFlags();
-    return {
-        {"export", {{"SimulationCellExporter", {{"simulation_cell", cellJson}}}}},
-        {"main_listing", {
-            {"simulation_cells", 1},
-            {"volume", cell.volume3D()},
-            {"is_2d", cell.is2D()},
-            {"effective_dimensions", cell.is2D() ? 2 : 3},
-            {"periodic_dimensions", static_cast<int>(pbcFlags[0]) + static_cast<int>(pbcFlags[1]) + static_cast<int>(pbcFlags[2])}
-        }},
-        {"sub_listings", {{"simulation_cell", std::move(cellJson)}}}
-    };
-}
-
-double squaredDistancePointToSegmentPbc(
-    const Point3& point,
-    const Point3& start,
-    const Point3& end,
-    const SimulationCell& simulationCell
-) {
-    const Point3 wrappedStart = point + simulationCell.wrapVector(start - point);
-    const Point3 wrappedEnd = wrappedStart + simulationCell.wrapVector(end - wrappedStart);
-    const Vector3 segment = wrappedEnd - wrappedStart;
-    const double segmentLengthSquared = segment.squaredLength();
-
-    if(segmentLengthSquared <= 1e-20) {
-        return (point - wrappedStart).squaredLength();
-    }
-
-    const double projection = std::clamp(
-        (point - wrappedStart).dot(segment) / segmentLengthSquared,
-        0.0,
-        1.0
-    );
-    const Point3 closestPoint = wrappedStart + (segment * projection);
-
-    return (point - closestPoint).squaredLength();
-}
-
 }  // namespace
+
+std::string getBurgersVectorString(const Vector3& burgers);
+json getNetworkStatistics(const DislocationNetwork* network, double cellVolume);
+json getJunctionInformation(const DislocationNetwork* network);
+json getCircuitInformation(const DislocationNetwork* network);
+int countJunctions(const DislocationNetwork* network);
+int countDanglingSegments(const DislocationNetwork* network);
 
 void clipDislocationLine(
     const std::vector<Point3>& line,
@@ -153,7 +115,7 @@ void clipDislocationLine(
     }
 }
 
-json DXAJsonExporter::exportDislocationsToJson(
+json buildDislocationsJson(
     const DislocationNetwork* network, 
     const SimulationCell* simulationCell
 ){
@@ -267,20 +229,8 @@ json DXAJsonExporter::exportDislocationsToJson(
 }
 
 
-void DXAJsonExporter::writeDislocationsMsgpackToFile(
-    const DislocationNetwork* network,
-    const SimulationCell& simulationCell,
-    const std::string& filePath
-){
-    if(network == nullptr) return;
-    const json data = exportDislocationsToJson(network, &simulationCell);
-    JsonUtils::writeJsonMsgpackToFile(data, filePath, false);
-}
-
-
-template <typename MeshType>
-json DXAJsonExporter::getMeshData(
-    const MeshType& mesh,
+json buildMeshJson(
+    const InterfaceMesh& mesh,
     const StructureAnalysis& structureAnalysis,
     bool includeTopologyInfo,
     const InterfaceMesh* interfaceMeshForTopology
@@ -385,393 +335,22 @@ json DXAJsonExporter::getMeshData(
     return meshData;
 }
 
-template <typename MeshType>
-void DXAJsonExporter::writeMeshMsgpackToFile(
-    const MeshType& mesh,
-    const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
-    const InterfaceMesh* interfaceMeshForTopology,
-    const std::string& filePath
-){
-    const json data = getMeshData(mesh, structureAnalysis, includeTopologyInfo, interfaceMeshForTopology);
-    JsonUtils::writeJsonMsgpackToFile(data, filePath, false);
-}
-
-
-void DXAJsonExporter::writeDefectMeshMsgpackToFile(
+json buildDefectMeshJson(
     const InterfaceMesh& interfaceMesh,
-    const BurgersLoopBuilder& tracer,
     const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
-    const std::string& filePath
+    bool includeTopologyInfo
 ){
-    const json data = getMeshData(
-        interfaceMesh, structureAnalysis, includeTopologyInfo, &interfaceMesh
-    );
-    JsonUtils::writeJsonMsgpackToFile(data, filePath, false);
+    return buildMeshJson(interfaceMesh, structureAnalysis, includeTopologyInfo, &interfaceMesh);
 }
 
-void DXAJsonExporter::exportPTMData(
-    const AnalysisContext& context,
-    const std::vector<int>& ids,
-    const std::string& outputFilename
-){
-    auto ptmProp = context.ptmOrientation;
-    auto corrProp = context.correspondencesCode;
-    if(!ptmProp || !corrProp) return;
-
-    const bool includeStructureType = context.structureTypes && context.structureTypes->size() >= ids.size();
-    json perAtom = json::array();
-    for(size_t i = 0; i < ids.size(); ++i){
-        json atom;
-        atom["id"] = ids[i];
-        atom["correspondences"] = static_cast<uint64_t>(corrProp->getInt64(i));
-        if(includeStructureType){
-            atom["structure_type"] = context.structureTypes->getInt(i);
-        }
-        json orient = json::array();
-        for(int c = 0; c < 4; ++c) orient.push_back(ptmProp->getDoubleComponent(i, c));
-        atom["orientation"] = orient;
-        perAtom.push_back(atom);
-    }
-
-    json data;
-    data["main_listing"] = {
-        {"total_atoms", static_cast<int>(ids.size())},
-        {"include_structure_type", includeStructureType}
-    };
-    data["per-atom-properties"] = perAtom;
-
-    const std::string ptmPath = outputFilename + "_ptm_data.msgpack";
-    if(JsonUtils::writeJsonMsgpackToFile(data, ptmPath, false)){
-        spdlog::info("PTM data written to {}", ptmPath);
-    }
-}
-
-
-void DXAJsonExporter::exportCoreAtoms(
-    const LammpsParser::Frame& frame,
-    const std::vector<uint8_t>& coreAtomFlags,
-    const std::string& outputFilename
-){
-    if(coreAtomFlags.empty()) return;
-
-    const size_t maxAtoms = std::min(static_cast<size_t>(frame.natoms), coreAtomFlags.size());
-
-    json coreAtomsArray = json::array();
-    for(size_t atomIdx = 0; atomIdx < maxAtoms; ++atomIdx){
-        if(coreAtomFlags[atomIdx] == 0) continue;
-        json atom;
-        atom["id"] = frame.ids[atomIdx];
-        if(atomIdx < frame.positions.size()){
-            const auto& pos = frame.positions[atomIdx];
-            atom["pos"] = { pos.x(), pos.y(), pos.z() };
-        }
-        coreAtomsArray.push_back(atom);
-    }
-
-    if(coreAtomsArray.empty()) return;
-
-    json data;
-    data["export"] = json::object();
-    data["export"]["AtomisticExporter"] = json::object();
-    data["export"]["AtomisticExporter"]["Core"] = coreAtomsArray;
-
-    if(JsonUtils::writeJsonMsgpackToFile(data, outputFilename, false)){
-        spdlog::info("Core atoms data written to {} ({} atoms)", outputFilename, coreAtomsArray.size());
-    }
-}
-
-void DXAJsonExporter::exportAtomsAroundDislocations(
-    const LammpsParser::Frame& frame,
-    const DislocationNetwork& network,
-    const StructureAnalysis& structureAnalysis,
-    double shellRadius,
-    const std::string& outputFilename
-){
-    if(shellRadius <= 0.0 || frame.natoms <= 0 || frame.positions.empty()) {
-        return;
-    }
-
-    std::vector<DislocationLineEdge> lineEdges;
-    for(const auto* segment : network.segments()) {
-        if(!segment || segment->isDegenerate()) {
-            continue;
-        }
-
-        for(size_t pointIndex = 1; pointIndex < segment->line.size(); ++pointIndex) {
-            const Point3& start = segment->line[pointIndex - 1];
-            const Point3& end = segment->line[pointIndex];
-            if((end - start).squaredLength() <= 1e-20) {
-                continue;
-            }
-
-            lineEdges.push_back({start, end});
-        }
-    }
-
-    if(lineEdges.empty()) {
-        return;
-    }
-
-    const size_t atomCount = std::min(
-        static_cast<size_t>(frame.natoms),
-        static_cast<size_t>(frame.positions.size())
-    );
-    const double shellRadiusSquared = shellRadius * shellRadius;
-    const SimulationCell& simulationCell = frame.simulationCell;
-    std::vector<uint8_t> selectedAtomFlags(atomCount, 0);
-
-    tbb::parallel_for(
-        tbb::blocked_range<size_t>(0, atomCount),
-        [&](const tbb::blocked_range<size_t>& range) {
-            for(size_t atomIndex = range.begin(); atomIndex < range.end(); ++atomIndex) {
-                const Point3& atomPosition = frame.positions[atomIndex];
-
-                for(const auto& edge : lineEdges) {
-                    if(
-                        squaredDistancePointToSegmentPbc(
-                            atomPosition,
-                            edge.start,
-                            edge.end,
-                            simulationCell
-                        ) <= shellRadiusSquared
-                    ) {
-                        selectedAtomFlags[atomIndex] = 1;
-                        break;
-                    }
-                }
-            }
-        }
-    );
-
-    std::map<std::string, json> groupedAtoms;
-    size_t selectedAtomCount = 0;
-    const auto* structureTypes = structureAnalysis.context().structureTypes;
-
-    for(size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex) {
-        if(selectedAtomFlags[atomIndex] == 0) {
-            continue;
-        }
-
-        int structureType = 0;
-        if(structureTypes && atomIndex < static_cast<size_t>(structureTypes->size())) {
-            structureType = structureTypes->getInt(static_cast<int>(atomIndex));
-        }
-
-        std::string structureName = structureAnalysis.getStructureTypeName(structureType);
-        if(structureName.empty()) {
-            structureName = "Unknown";
-        }
-
-        const int atomId = atomIndex < frame.ids.size()
-            ? frame.ids[atomIndex]
-            : static_cast<int>(atomIndex);
-        const auto& pos = frame.positions[atomIndex];
-
-        groupedAtoms[structureName].push_back({
-            {"id", atomId},
-            {"pos", {pos.x(), pos.y(), pos.z()}},
-            {"structure_type", structureType}
-        });
-        selectedAtomCount++;
-    }
-
-    if(selectedAtomCount == 0) {
-        return;
-    }
-
-    json atomsByStructure = json::object();
-    for(auto& [structureName, atoms] : groupedAtoms) {
-        atomsByStructure[structureName] = std::move(atoms);
-    }
-
-    json data;
-    data["main_listing"] = {
-        {"total_atoms", static_cast<int>(selectedAtomCount)},
-        {"structure_groups", static_cast<int>(groupedAtoms.size())},
-        {"shell_radius", shellRadius}
-    };
-    data["sub_listings"] = atomsByStructure;
-    data["export"] = json::object();
-    data["export"]["AtomisticExporter"] = atomsByStructure;
-
-    if(JsonUtils::writeJsonMsgpackToFile(data, outputFilename, false)) {
-        spdlog::info(
-            "Atoms around dislocations written to {} ({} atoms, radius={})",
-            outputFilename,
-            selectedAtomCount,
-            shellRadius
-        );
-    }
-}
-
-json DXAJsonExporter::vectorToJson(const Vector3& vector){
-    json vectorJson;
-    vectorJson["x"] = vector.x();
-    vectorJson["y"] = vector.y();
-    vectorJson["z"] = vector.z();
-    return vectorJson;
-}
-
-json DXAJsonExporter::affineTransformationToJson(const AffineTransformation& transform){
-    json transformJson = json::array();
-    for(size_t i = 0; i < 3; ++i){
-        json row = json::array();
-        for(size_t j = 0; j < 3; ++j){
-            row.push_back(transform(i, j));
-        }
-        transformJson.push_back(row);
-    }
-    return transformJson;
-}
-
-json DXAJsonExporter::simulationCellToJson(const SimulationCell& cell){
-    json cellJson;
-    
-    cellJson["matrix"] = affineTransformationToJson(cell.matrix());
-    cellJson["volume"] = cell.volume3D();
-    cellJson["is_2d"] = cell.is2D();
-
-    Vector3 a = cell.matrix().column(0);
-    Vector3 b = cell.matrix().column(1);
-    Vector3 c = cell.matrix().column(2);
-    
-    cellJson["lattice_vectors"] = {
-        {"a", vectorToJson(a)},
-        {"b", vectorToJson(b)},
-        {"c", vectorToJson(c)}
-    };
-    
-    cellJson["lattice_parameters"] = {
-		{"a_length", a.length()},
-		{"b_length", b.length()},
-		{"c_length", c.length()}
-    };
-    
-    return cellJson;
-}
-
-json DXAJsonExporter::getExtendedSimulationCellInfo(const SimulationCell& cell){
-    json cellJson = simulationCellToJson(cell);
-    
-    const auto& pbcFlags = cell.pbcFlags();
-    cellJson["periodic_boundary_conditions"] = {
-        {"x", pbcFlags[0]},
-        {"y", pbcFlags[1]}, 
-        {"z", pbcFlags[2]}
-    };
-    
-    Vector3 a = cell.matrix().column(0);
-    Vector3 b = cell.matrix().column(1);
-    Vector3 c = cell.matrix().column(2);
-    
-    cellJson["angles"] = {
-        {"alpha", calculateAngle(b, c)},
-        {"beta", calculateAngle(a, c)},
-        {"gamma", calculateAngle(a, b)}
-    };
-    
-    cellJson["reciprocal_lattice"] = {
-        {"matrix", affineTransformationToJson(cell.inverseMatrix())},
-        {"volume", 1.0 / cell.volume3D()}
-    };
-    
-    cellJson["dimensionality"] = {
-        {"is_2d", cell.is2D()},
-        {"effective_dimensions", cell.is2D() ? 2 : 3}
-    };
-
-    return wrapSimulationCellInfoJson(cell, std::move(cellJson));
-}
-
-std::string DXAJsonExporter::getBurgersVectorString(const Vector3& burgers){
+std::string getBurgersVectorString(const Vector3& burgers){
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3);
     oss << "[" << burgers.x() << " " << burgers.y() << " " << burgers.z() << "]";
     return oss.str();
 }
 
-void DXAJsonExporter::exportForStructureIdentification(
-    const LammpsParser::Frame &frame,
-    const StructureAnalysis& structureAnalysis,
-    const std::string& outputFilename
-){
-    const size_t N = frame.natoms;
-
-    std::vector<int> atomStructureTypes(N);
-    for(size_t i = 0; i < N; ++i){
-        atomStructureTypes[i] = static_cast<int>(
-            structureAnalysis.context().structureTypes->getInt(static_cast<int>(i))
-        );
-    }
-
-    json perAtomProperties = json::array();
-    if(structureAnalysis.usingPTM()){
-        const auto& ctx = structureAnalysis.context();
-        const auto ptmOrientation = ctx.ptmOrientation;
-        const auto correspondences = ctx.correspondencesCode;
-
-        for(size_t i = 0; i < N; ++i){
-            int atomId = i < frame.ids.size()
-                ? frame.ids[i]
-                : static_cast<int>(i);
-
-            json atom;
-            atom["id"] = atomId;
-            atom["structure_type"] = atomStructureTypes[i];
-
-            if(i < static_cast<size_t>(frame.positions.size())){
-                const auto& pos = frame.positions[i];
-                atom["pos"] = {pos.x(), pos.y(), pos.z()};
-            }else{
-                atom["pos"] = {0.0, 0.0, 0.0};
-            }
-
-            if(correspondences){
-                atom["correspondence"] = static_cast<uint64_t>(correspondences->getInt64(i));
-            }
-
-            if(ptmOrientation){
-                atom["orientation"] = {
-                    ptmOrientation->getDoubleComponent(i, 0),
-                    ptmOrientation->getDoubleComponent(i, 1),
-                    ptmOrientation->getDoubleComponent(i, 2),
-                    ptmOrientation->getDoubleComponent(i, 3)
-                };
-            }
-
-            perAtomProperties.push_back(atom);
-        }
-    }else{
-        for(size_t i = 0; i < N; ++i){
-            int atomId = i < frame.ids.size()
-                ? frame.ids[i]
-                : static_cast<int>(i);
-
-            json atom;
-            atom["id"] = atomId;
-            atom["structure_type"] = atomStructureTypes[i];
-            atom["structure_name"] = structureAnalysis.getStructureTypeName(atomStructureTypes[i]);
-
-            if(i < static_cast<size_t>(frame.positions.size())){
-                const auto& pos = frame.positions[i];
-                atom["pos"] = {pos.x(), pos.y(), pos.z()};
-            }else{
-                atom["pos"] = {0.0, 0.0, 0.0};
-            }
-
-            perAtomProperties.push_back(atom);
-        }
-    }
-
-    json structureStats;
-    structureStats["main_listing"] = structureAnalysis.buildMainListing();
-    structureStats["per-atom-properties"] = perAtomProperties;
-    JsonUtils::writeJsonMsgpackToFile(structureStats, outputFilename + "_structure_analysis_stats.msgpack", false);
-}
-
-json DXAJsonExporter::getNetworkStatistics(const DislocationNetwork* network, double cellVolume){
+json getNetworkStatistics(const DislocationNetwork* network, double cellVolume){
     json stats;
     const auto& segments = network->segments();
     
@@ -816,7 +395,7 @@ json DXAJsonExporter::getNetworkStatistics(const DislocationNetwork* network, do
     return stats;
 }
 
-json DXAJsonExporter::getJunctionInformation(const DislocationNetwork* network){
+json getJunctionInformation(const DislocationNetwork* network){
     json junctionInfo;
     const auto& segments = network->segments();
     
@@ -847,7 +426,7 @@ json DXAJsonExporter::getJunctionInformation(const DislocationNetwork* network){
     return junctionInfo;
 }
 
-json DXAJsonExporter::getCircuitInformation(const DislocationNetwork* network){
+json getCircuitInformation(const DislocationNetwork* network){
     json circuitInfo;
     const auto& segments = network->segments();
     
@@ -897,7 +476,7 @@ json DXAJsonExporter::getCircuitInformation(const DislocationNetwork* network){
 
 
 
-int DXAJsonExporter::countJunctions(const DislocationNetwork* network){
+int countJunctions(const DislocationNetwork* network){
     int junctions = 0;
     const auto& segments = network->segments();
     
@@ -911,7 +490,7 @@ int DXAJsonExporter::countJunctions(const DislocationNetwork* network){
     return junctions / 2;
 }
 
-int DXAJsonExporter::countDanglingSegments(const DislocationNetwork* network){
+int countDanglingSegments(const DislocationNetwork* network){
     int dangling = 0;
     const auto& segments = network->segments();
     
@@ -924,24 +503,4 @@ int DXAJsonExporter::countDanglingSegments(const DislocationNetwork* network){
     return dangling;
 }
 
-double DXAJsonExporter::calculateAngle(const Vector3& a, const Vector3& b){
-    double dot = a.dot(b);
-	double magnitudes = a.length() * b.length();
-    
-    if(magnitudes == 0.0) return 0.0;
-    
-    double cosAngle = dot / magnitudes;
-    cosAngle = std::max(-1.0, std::min(1.0, cosAngle));
-    
-    return std::acos(cosAngle) * 180.0 / PI;
 }
-
-}
-
-template void Volt::DXAJsonExporter::writeMeshMsgpackToFile<Volt::InterfaceMesh>(
-    const Volt::InterfaceMesh& mesh,
-    const Volt::StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
-    const Volt::InterfaceMesh* interfaceMeshForTopology,
-    const std::string& filePath
-);

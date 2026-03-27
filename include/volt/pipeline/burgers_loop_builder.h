@@ -2,8 +2,8 @@
 
 #include <volt/core/volt.h>
 #include <volt/utilities/memory_pool.h>
-#include <volt/structures/dislocation_network.h>
-#include <volt/geometry/interface_mesh.h>
+#include <volt/helpers/dislocation_network.h>
+#include <volt/pipeline/interface_mesh.h>
 #include <boost/random/uniform_int_distribution.hpp>
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_int.hpp>
@@ -42,7 +42,7 @@ public:
 	}
 
 	bool traceDislocationSegments();
-	void finishDislocationSegments(int crystalStructure);
+	void finishDislocationSegments(int referenceStructureLabel);
 
 	const std::vector<DislocationNode*>& danglingNodes() const{
 		return _danglingNodes;

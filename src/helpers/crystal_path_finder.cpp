@@ -1,5 +1,5 @@
 #include <volt/core/volt.h>
-#include <volt/analysis/crystal_path_finder.h>
+#include <volt/helpers/crystal_path_finder.h>
 
 namespace Volt{
 

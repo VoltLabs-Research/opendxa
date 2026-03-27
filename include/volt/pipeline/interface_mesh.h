@@ -1,8 +1,8 @@
 #pragma once
 
 #include <volt/core/volt.h>
-#include <volt/geometry/half_edge_mesh.h>
-#include <volt/analysis/elastic_mapping.h>
+#include <volt/helpers/half_edge_mesh.h>
+#include <volt/pipeline/elastic_mapping.h>
 #include <atomic>
 
 namespace Volt{

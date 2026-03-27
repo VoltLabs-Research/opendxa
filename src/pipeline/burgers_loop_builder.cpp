@@ -1,6 +1,5 @@
-#include <volt/analysis/burgers_loop_builder.h>
-#include <volt/geometry/interface_mesh.h>
-#include <volt/utilities/concurrence/parallel_system.h>
+#include <volt/pipeline/burgers_loop_builder.h>
+#include <volt/pipeline/interface_mesh.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
 #include <tbb/blocked_range.h>
@@ -79,7 +78,7 @@ void BurgersLoopBuilder::discardCircuit(BurgersCircuit* circuit){
 // Finalize all traced segments. Trim preliminary points, re-express Burgers
 // vectors in the target crystal structure and orient each line so
 // it points consistently.
-void BurgersLoopBuilder::finishDislocationSegments(int crystalStructure){
+void BurgersLoopBuilder::finishDislocationSegments(int referenceStructureLabel){
     auto& segs = network().segments();
 
     tbb::parallel_for(tbb::blocked_range<size_t>(0, segs.size()), 
@@ -106,9 +105,9 @@ void BurgersLoopBuilder::finishDislocationSegments(int crystalStructure){
             for(size_t i = r.begin(); i != r.end(); ++i){
                 auto* s = segs[i];
                 auto* orig = s->burgersVector.cluster();
-                if(orig->structure != crystalStructure){
+                if(orig->structure != referenceStructureLabel){
                     for(auto* t = orig->transitions; t && t->distance <= 1; t = t->next){
-                        if(t->cluster2->structure == crystalStructure){
+                        if(t->cluster2->structure == referenceStructureLabel){
                             s->burgersVector = ClusterVector(
                                 t->transform(s->burgersVector.localVec()),
                                 t->cluster2

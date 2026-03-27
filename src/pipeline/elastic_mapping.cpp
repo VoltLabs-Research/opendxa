@@ -1,8 +1,7 @@
 #include <volt/core/volt.h>
-#include <volt/analysis/burgers_loop_builder.h>
-#include <volt/analysis/crystal_path_finder.h>
-#include <volt/analysis/elastic_mapping.h>
-#include <volt/utilities/concurrence/parallel_system.h>
+#include <volt/pipeline/burgers_loop_builder.h>
+#include <volt/helpers/crystal_path_finder.h>
+#include <volt/pipeline/elastic_mapping.h>
 #include <tbb/parallel_for.h>
 #include <mutex>
 #include <algorithm>

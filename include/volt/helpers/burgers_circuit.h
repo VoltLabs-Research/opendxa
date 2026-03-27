@@ -5,8 +5,8 @@
 #include <vector>
 
 #include <volt/core/volt.h>
-#include <volt/structures/cluster_vector.h>
-#include <volt/geometry/interface_mesh.h>
+#include <volt/helpers/cluster_vector.h>
+#include <volt/pipeline/interface_mesh.h>
 
 namespace Volt{
 

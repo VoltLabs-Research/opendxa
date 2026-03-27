@@ -5,7 +5,7 @@
 #include <optional>
 #include <boost/dynamic_bitset.hpp>
 #include <volt/utilities/memory_pool.h>
-#include <volt/structures/cluster_vector.h>
+#include <volt/helpers/cluster_vector.h>
 #include <volt/analysis/structure_analysis.h>
 
 namespace Volt{

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <volt/core/volt.h>
-#include <volt/geometry/delaunay_tessellation.h>
+#include <volt/pipeline/delaunay_tessellation.h>
 #include <volt/structures/cluster.h>
 #include <volt/structures/cluster_graph.h>
 #include <volt/analysis/structure_analysis.h>

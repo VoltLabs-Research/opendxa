@@ -1,7 +1,6 @@
-#include <volt/geometry/interface_mesh.h>
-#include <volt/analysis/burgers_loop_builder.h>
-#include <volt/coordination_structures.h>
-#include <volt/geometry/manifold_construction_helper.h>
+#include <volt/pipeline/interface_mesh.h>
+#include <volt/pipeline/burgers_loop_builder.h>
+#include <volt/helpers/manifold_construction_helper.h>
 #include <algorithm>
 #include <array>
 #include <numeric>
@@ -106,20 +105,6 @@ void InterfaceMesh::createMesh(double maxNeighborDist){
             // Compute the actual displacement vector between the two vertices
             e->physicalVector = pos[ni] - pos[i];
 
-            // Verify that no coordinate exceeds half the cell length in that axis,
-            // which would imply we need a larger box or ghost cells
-            for(int d = 0; d < 3; ++d){
-                if(structureAnalysis().context().simCell.pbcFlags()[d]){
-					Vector3 physicalVec = e->physicalVector;
-					if(std::abs(
-						structureAnalysis().context().simCell.inverseMatrix().prodrow(physicalVec, d)
-					) >= double{0.5} + EPSILON)
-                    {
-                        CoordinationStructures::generateCellTooSmallError(d);
-                    }
-                }
-            }
-
             // Query the elastic mapping to find the cluster-to-cluster shift and rotation
             // that ideally produced this edge. We store both the local Burgers-vector-like "clusterVector"
             // and the small rotation "clusterTransition" that maps between the two grain orientations.
@@ -140,15 +125,15 @@ void InterfaceMesh::createMesh(double maxNeighborDist){
     };
 
     // Build the faces and topology. If any step fails, bail out.
-    spdlog::debug("[PROFILE] Interface Mesh - Constructing manifold...");
+    spdlog::info("[PROFILE] Interface Mesh - Constructing manifold...");
     if(!helper.construct(tetraRegion, prepareFace)){
         throw std::runtime_error("Error building the faces and topology.");
 	}
-    spdlog::debug("[PROFILE] Interface Mesh - Constructing manifold took ... (not timed yet)");
+    spdlog::info("[PROFILE] Interface Mesh - Constructing manifold took ... (not timed yet)");
 
-    spdlog::debug("[PROFILE] Interface Mesh - makeManifold...");
+    spdlog::info("[PROFILE] Interface Mesh - makeManifold...");
     makeManifold();
-    spdlog::debug("[PROFILE] Interface Mesh - makeManifold finished.");
+    spdlog::info("[PROFILE] Interface Mesh - makeManifold finished.");
 }
 
 // After tracing dislocation circuits on the interface mesh, extract only
