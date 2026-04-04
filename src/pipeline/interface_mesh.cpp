@@ -129,7 +129,7 @@ void InterfaceMesh::createMesh(double maxNeighborDist){
     if(!helper.construct(tetraRegion, prepareFace)){
         throw std::runtime_error("Error building the faces and topology.");
 	}
-    spdlog::info("[PROFILE] Interface Mesh - Constructing manifold took ... (not timed yet)");
+    spdlog::info("[PROFILE] Interface Mesh - Constructing manifold took ...");
 
     spdlog::info("[PROFILE] Interface Mesh - makeManifold...");
     makeManifold();
