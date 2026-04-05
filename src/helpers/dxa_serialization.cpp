@@ -16,7 +16,7 @@
 
 namespace Volt::DxaSerialization {
 
-namespace {
+namespace Detail {
 
 Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
     if(burgersVector.cluster() == nullptr){
@@ -25,7 +25,9 @@ Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
     return burgersVector.toSpatialVector();
 }
 
-}  // namespace
+}  // namespace Detail
+
+using namespace Detail;
 
 std::string getBurgersVectorString(const Vector3& burgers);
 json getNetworkStatistics(const DislocationNetwork* network, double cellVolume);
