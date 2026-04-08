@@ -2,7 +2,6 @@
 
 #include <volt/core/volt.h>
 #include <volt/core/simulation_cell.h>
-#include <spdlog/spdlog.h>
 #include <volt/core/particle_property.h>
 #include <volt/pipeline/delaunay_tessellation.h>
 
@@ -48,12 +47,9 @@ public:
 		CellRegionFunc&& determineCellRegion,
 		PrepareMeshFaceFunc&& prepareMeshFaceFunc = PrepareMeshFaceFunc(),
 		LinkManifoldsFunc&& linkManifoldsFunc = LinkManifoldsFunc()
-	){
-		spdlog::info("  [PROFILE] Helper - classifyTetrahedra...");
-		if(!classifyTetrahedra(std::move(determineCellRegion))) return false;
-		spdlog::info("  [PROFILE] Helper - createInterfaceFacets...");
-		if(!createInterfaceFacets(std::move(prepareMeshFaceFunc))) return false;
-		spdlog::info("  [PROFILE] Helper - linkHalfedges...");
+	){
+		if(!classifyTetrahedra(std::move(determineCellRegion))) return false;
+		if(!createInterfaceFacets(std::move(prepareMeshFaceFunc))) return false;
 		if(!linkHalfedges(std::move(linkManifoldsFunc))) return false;
 		return true;
 	}
