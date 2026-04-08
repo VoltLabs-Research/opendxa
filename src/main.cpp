@@ -1,5 +1,6 @@
 #include <volt/cli/common.h>
 #include <volt/pipeline/dislocation_analysis.h>
+#include <volt/structures/crystal_topology_registry.h>
 
 #include <spdlog/spdlog.h>
 
@@ -14,7 +15,7 @@ void showUsage(const std::string& name) {
     std::cerr
         << "  --clusters-table <path>           Path to *_clusters.table exported by CNA/PTM.\n"
         << "  --clusters-transitions <path>     Path to *_cluster_transitions.table exported by CNA/PTM.\n"
-        << "  --reference-structure-label <int> Structure label in *_clusters.table that represents the reference matrix phase.\n"
+        << "  --reference-topology <name>       Topology name/alias from POSCAR metadata for the reference matrix phase.\n"
         << "  --maxTrialCircuitSize <int>       Maximum Burgers circuit size. [default: 14]\n"
         << "  --circuitStretchability <int>     Circuit stretchability factor. [default: 9]\n"
         << "  --lineSmoothingLevel <float>      Line smoothing level. [default: 1]\n"
@@ -40,19 +41,18 @@ int main(int argc, char* argv[]) {
     spdlog::info("Output base: {}", outputBase);
     
     DislocationAnalysis analyzer;
-    if(!hasOption(opts, "--reference-structure-label")){
-        spdlog::error("Missing required option --reference-structure-label");
+    if(!hasOption(opts, "--reference-topology")){
+        spdlog::error("Missing required option --reference-topology");
         return 1;
     }
-    int referenceStructureLabel = 0;
-    try{
-        referenceStructureLabel = std::stoi(getString(opts, "--reference-structure-label"));
-    }catch(...){
-        spdlog::error("Invalid value for --reference-structure-label");
+    const std::string topologyName = getString(opts, "--reference-topology");
+    const CrystalTopologyEntry* topology = crystalTopologyByName(topologyName);
+    if(!topology){
+        spdlog::error("Unknown value for --reference-topology: {}", topologyName);
         return 1;
     }
 
-    analyzer.setReferenceStructureLabel(referenceStructureLabel);
+    analyzer.setReferenceStructureLabel(topology->structureType);
     analyzer.setMaxTrialCircuitSize(getInt(opts, "--maxTrialCircuitSize", 14));
     analyzer.setCircuitStretchability(getInt(opts, "--circuitStretchability", 9));
     analyzer.setLineSmoothingLevel(getDouble(opts, "--lineSmoothingLevel", 1.0));

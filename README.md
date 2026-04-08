@@ -14,9 +14,9 @@ OpenDXA requires:
 
 - `--clusters-table <path>`
 - `--clusters-transitions <path>`
-- `--reference-structure-label <int>`
+- `--reference-topology <name>`
 
-`--reference-structure-label` must be the numeric `structure_type` label used by the matrix phase in `*_clusters.table`.
+`--reference-topology` must match the POSCAR-driven topology name of the matrix phase, for example `fcc`, `bcc`, `hcp`, or `diamond`.
 
 ## Annotated Dump Requirements
 
@@ -71,29 +71,41 @@ OpenDXA consumes them in this order:
 The clusters table must contain:
 
 - `cluster_id`
+- `topology_name`
+
+It may also include:
+
 - `structure_type`
 
 Where:
 
 - `cluster_id`: unique cluster identifier referenced by the dump's per-atom `cluster_id`
-- `structure_type`: structure label assigned to that cluster
+- `topology_name`: POSCAR-driven topology identifier assigned to that cluster
+- `structure_type`: optional legacy numeric label assigned to that cluster
 
-`--reference-structure-label` must match the `structure_type` value used by the matrix phase. Common VOLT labels are:
-
-- `1` = `SC`
-- `2` = `FCC`
-- `3` = `HCP`
-- `4` = `BCC`
-- `5` = `CUBIC_DIAMOND`
-- `6` = `HEX_DIAMOND`
+`--reference-topology` must match the `topology_name` value used by the matrix phase clusters.
 
 Examples:
 
-- FCC matrix -> `--reference-structure-label 2`
-- BCC matrix -> `--reference-structure-label 4`
-- If the matrix clusters are written as `structure_type = 3`, use `--reference-structure-label 3`
+- FCC matrix -> `--reference-topology fcc`
+- BCC matrix -> `--reference-topology bcc`
+- Cubic diamond matrix -> `--reference-topology diamond`
 
-The safe rule is simple: inspect the matrix-phase clusters in `*_clusters.table` and pass that same label to OpenDXA.
+If a producer still uses the legacy label path, `structure_type` may be used as a compatibility fallback, but it is no longer the source of truth for topology selection.
+
+## POSCAR-Driven Topology Contract
+
+Crystal topology now comes from the shared topology registry generated from embedded metadata in the lattice POSCAR files under `CoreToolkit/topologies`.
+
+That shared registry provides:
+
+- primitive-cell basis
+- canonical neighbor vectors
+- explicit common-neighbor graph
+- symmetry permutations
+- stable topology identity by name
+
+OpenDXA does not need hardcoded lattice vectors in its own code path. It consumes the reconstructed dump plus cluster graph, and resolves the matrix phase through the shared POSCAR-driven topology name.
 
 ## `*_cluster_transitions.table` Requirements
 

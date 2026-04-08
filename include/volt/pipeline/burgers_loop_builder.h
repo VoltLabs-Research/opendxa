@@ -91,6 +91,17 @@ private:
 	std::vector<DislocationNode*> _danglingNodes;
 	BurgersCircuit* _unusedCircuit;
 	mutable size_t _edgeStartIndex;  
+
+	std::uint64_t _debugPrimaryCreated = 0;
+	std::uint64_t _debugPrimaryRejectedZeroBurgers = 0;
+	std::uint64_t _debugPrimaryRejectedEdgeSum = 0;
+	std::uint64_t _debugPrimaryRejectedIntersection = 0;
+	std::uint64_t _debugSecondaryCreated = 0;
+	std::uint64_t _debugSecondaryRejectedNumCircuits = 0;
+	std::uint64_t _debugSecondaryRejectedTooLong = 0;
+	std::uint64_t _debugSecondaryRejectedZeroBurgers = 0;
+	std::uint64_t _debugSecondaryRejectedEdgeSum = 0;
+	std::uint64_t _debugSecondaryRejectedFrankRotation = 0;
 };
 
 }

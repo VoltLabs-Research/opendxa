@@ -1,5 +1,6 @@
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/pipeline/interface_mesh.h>
+#include <spdlog/spdlog.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
 #include <tbb/blocked_range.h>
@@ -63,6 +64,22 @@ bool BurgersLoopBuilder::traceDislocationSegments(){
             });
         }
     }
+
+    spdlog::info(
+        "Burgers debug: primary_created={} primary_reject_zero={} primary_reject_edge_sum={} primary_reject_intersection={} "
+        "secondary_created={} secondary_reject_num_circuits={} secondary_reject_too_long={} secondary_reject_zero={} "
+        "secondary_reject_edge_sum={} secondary_reject_frank={}",
+        _debugPrimaryCreated,
+        _debugPrimaryRejectedZeroBurgers,
+        _debugPrimaryRejectedEdgeSum,
+        _debugPrimaryRejectedIntersection,
+        _debugSecondaryCreated,
+        _debugSecondaryRejectedNumCircuits,
+        _debugSecondaryRejectedTooLong,
+        _debugSecondaryRejectedZeroBurgers,
+        _debugSecondaryRejectedEdgeSum,
+        _debugSecondaryRejectedFrankRotation
+    );
 
     return true;
 }
@@ -319,7 +336,18 @@ bool BurgersLoopBuilder::createBurgersCircuit(InterfaceMesh::Edge* edge, int max
 
 	// Make sure new circuit does not intersect other circuits.
 	bool intersects = intersectsOtherCircuits(forwardCircuit);
-	if(b.isZero(CA_LATTICE_VECTOR_EPSILON) || edgeSum.isZero(CA_ATOM_VECTOR_EPSILON) == false || intersects){
+	const bool zeroBurgers = b.isZero(CA_LATTICE_VECTOR_EPSILON);
+	const bool badEdgeSum = edgeSum.isZero(CA_ATOM_VECTOR_EPSILON) == false;
+	if(zeroBurgers || badEdgeSum || intersects){
+		if(zeroBurgers){
+			++_debugPrimaryRejectedZeroBurgers;
+		}
+		if(badEdgeSum){
+			++_debugPrimaryRejectedEdgeSum;
+		}
+		if(intersects){
+			++_debugPrimaryRejectedIntersection;
+		}
 		// Reset edges.
 		InterfaceMesh::Edge* e = forwardCircuit->firstEdge;
 		do{
@@ -335,6 +363,7 @@ bool BurgersLoopBuilder::createBurgersCircuit(InterfaceMesh::Edge* edge, int max
 
 	assert(!forwardCircuit->calculateBurgersVector().localVec().isZero(CA_LATTICE_VECTOR_EPSILON));
 	assert(!b.isZero(CA_LATTICE_VECTOR_EPSILON));
+	++_debugPrimaryCreated;
 	createAndTraceSegment(ClusterVector(b, forwardCircuit->firstEdge->clusterTransition->cluster1), forwardCircuit, maxBurgersCircuitSize);
 
 	return true;
@@ -1226,11 +1255,27 @@ void BurgersLoopBuilder::createSecondarySegment(InterfaceMesh::Edge* firstEdge, 
 	}
 
 	// Create secondary segment only for dislocations (b != 0) and small enough dislocation cores.
-	if(numCircuits == 1
-			|| edgeCount > maxCircuitLength
-			|| burgersVector.isZero(CA_LATTICE_VECTOR_EPSILON)
-			|| edgeSum.isZero(CA_ATOM_VECTOR_EPSILON) == false
-			|| !frankRotation.equals(Matrix3::Identity(), CA_TRANSITION_MATRIX_EPSILON)){
+	const bool rejectNumCircuits = numCircuits == 1;
+	const bool rejectTooLong = edgeCount > maxCircuitLength;
+	const bool rejectZeroBurgers = burgersVector.isZero(CA_LATTICE_VECTOR_EPSILON);
+	const bool rejectEdgeSum = edgeSum.isZero(CA_ATOM_VECTOR_EPSILON) == false;
+	const bool rejectFrank = !frankRotation.equals(Matrix3::Identity(), CA_TRANSITION_MATRIX_EPSILON);
+	if(rejectNumCircuits || rejectTooLong || rejectZeroBurgers || rejectEdgeSum || rejectFrank){
+		if(rejectNumCircuits){
+			++_debugSecondaryRejectedNumCircuits;
+		}
+		if(rejectTooLong){
+			++_debugSecondaryRejectedTooLong;
+		}
+		if(rejectZeroBurgers){
+			++_debugSecondaryRejectedZeroBurgers;
+		}
+		if(rejectEdgeSum){
+			++_debugSecondaryRejectedEdgeSum;
+		}
+		if(rejectFrank){
+			++_debugSecondaryRejectedFrankRotation;
+		}
 
 		// Discard unused circuit.
 		edge = circuitStart;
@@ -1260,6 +1305,7 @@ void BurgersLoopBuilder::createSecondarySegment(InterfaceMesh::Edge* firstEdge, 
 	assert(forwardCircuit->countEdges() == forwardCircuit->edgeCount);
 
 	// Do all the rest.
+	++_debugSecondaryCreated;
 	createAndTraceSegment(ClusterVector(burgersVector, baseCluster), forwardCircuit, maxCircuitLength);
 }
 
