@@ -17,10 +17,10 @@ void showUsage(const std::string& name) {
         << "  --clusters-transitions <path>     Path to *_cluster_transitions.table exported by CNA/PTM.\n"
         << "  --reference-topology <name>       Topology name/alias from OpenDXA YAML definitions for the matrix phase.\n"
         << "  --lattice-dir <path>              Directory containing OpenDXA lattice YAMLs.\n"
-        << "  --maxTrialCircuitSize <int>       Maximum Burgers circuit size. [default: 14]\n"
-        << "  --circuitStretchability <int>     Circuit stretchability factor. [default: 9]\n"
-        << "  --lineSmoothingLevel <float>      Line smoothing level. [default: 1]\n"
-        << "  --linePointInterval <float>       Point interval on dislocation lines. [default: 2.5]\n"
+        << "  --max-trial-circuit-size <int>    Maximum Burgers circuit size. [default: 14]\n"
+        << "  --circuit-stretchability <int>    Circuit stretchability factor. [default: 9]\n"
+        << "  --line-smoothing-level <float>    Line smoothing level. [default: 1]\n"
+        << "  --line-point-interval <float>     Point interval on dislocation lines. [default: 2.5]\n"
         << "  --ghost-layer-scale <float>       Ghost-layer scale relative to max neighbor distance. [default: 3.5]\n"
         << "  --interface-alpha-scale <float>   Interface alpha scale. [default: 5.0]\n"
         << "  --inteface-alpha-scale <float>    Alias for --interface-alpha-scale.\n"
@@ -71,10 +71,10 @@ int main(int argc, char* argv[]) {
     }
 
     analyzer.setReferenceTopology(topology->name);
-    analyzer.setMaxTrialCircuitSize(getInt(opts, "--maxTrialCircuitSize", 14));
-    analyzer.setCircuitStretchability(getInt(opts, "--circuitStretchability", 9));
-    analyzer.setLineSmoothingLevel(getDouble(opts, "--lineSmoothingLevel", 1.0));
-    analyzer.setLinePointInterval(getDouble(opts, "--linePointInterval", 2.5));
+    analyzer.setMaxTrialCircuitSize(getInt(opts, "--max-trial-circuit-size", 14));
+    analyzer.setCircuitStretchability(getInt(opts, "--circuit-stretchability", 9));
+    analyzer.setLineSmoothingLevel(getDouble(opts, "--line-smoothing-level", 1.0));
+    analyzer.setLinePointInterval(getDouble(opts, "--line-point-interval", 2.5));
     analyzer.setGhostLayerScale(getDouble(opts, "--ghost-layer-scale", 3.5));
     analyzer.setInterfaceAlphaScale(getDouble(
         opts,
@@ -91,9 +91,7 @@ int main(int argc, char* argv[]) {
     analyzer.setClipPbcSegments(getBool(opts, "--clip-pbc-segments", true));
     analyzer.setCoverDomainWithFiniteTets(getBool(opts, "--cover-domain-with-finite-tets", false));
     analyzer.setClustersTablePath(getString(opts, "--clusters-table"));
-    analyzer.setClusterTransitionsPath(
-        getString(opts, "--clusters-transitions", getString(opts, "--cluster-transitions"))
-    );
+    analyzer.setClusterTransitionsPath(getString(opts, "--clusters-transitions"));
     
     spdlog::info("Starting dislocation analysis...");
     try{

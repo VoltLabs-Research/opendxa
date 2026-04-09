@@ -21,13 +21,12 @@ opendxa <annotated.dump> [output_base] [options]
 | `[output_base]` | No | Output basename. If omitted, OpenDXA derives it from the input dump path. | derived from input |
 | `--clusters-table <path>` | Yes | Path to `*_clusters.table`. | |
 | `--clusters-transitions <path>` | Yes | Path to `*_cluster_transitions.table`. | |
-| `--cluster-transitions <path>` | No | Accepted alias for `--clusters-transitions`. | |
 | `--reference-topology <name>` | Yes | Matrix-phase topology name resolved from OpenDXA lattice YAMLs. | |
 | `--lattice-dir <path>` | No | Directory containing OpenDXA lattice YAMLs. | compiled/package lattice directory |
-| `--maxTrialCircuitSize <int>` | No | Maximum Burgers circuit size. | `14` |
-| `--circuitStretchability <int>` | No | Circuit stretchability factor. | `9` |
-| `--lineSmoothingLevel <float>` | No | Smoothing applied to dislocation lines. | `1.0` |
-| `--linePointInterval <float>` | No | Point spacing along exported lines. | `2.5` |
+| `--max-trial-circuit-size <int>` | No | Maximum Burgers circuit size. | `14` |
+| `--circuit-stretchability <int>` | No | Circuit stretchability factor. | `9` |
+| `--line-smoothing-level <float>` | No | Smoothing applied to dislocation lines. | `1.0` |
+| `--line-point-interval <float>` | No | Point spacing along exported lines. | `2.5` |
 | `--ghost-layer-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance before building ghost atoms for the Delaunay tessellation. | `3.5` |
 | `--interface-alpha-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance when running the interface alpha-shape filter. | `5.0` |
 | `--inteface-alpha-scale <float>` | No | Accepted alias for `--interface-alpha-scale`. | |
