@@ -5,6 +5,12 @@ It is decoupled from the upstream structure-identification algorithm, but it is 
 agnostic to lattice geometry: the matrix phase must exist as a reference lattice
 definition under `OpenDXA/lattices` or in a runtime lattice directory.
 
+## One-Command Install
+
+```bash
+curl -sSL https://raw.githubusercontent.com/VoltLabs-Research/CoreToolkit/main/scripts/install-plugin.sh | bash -s -- OpenDXA
+```
+
 ## OpenDXA CLI
 
 Usage:
@@ -40,19 +46,6 @@ opendxa <annotated.dump> [output_base] [options]
 | `--clip-pbc-segments <bool>` | No | Clip exported dislocation polylines at periodic boundaries. If disabled, OpenDXA exports the raw traced lines. | `true` |
 | `--cover-domain-with-finite-tets <bool>` | No | Add helper points so the Delaunay domain is fully covered by finite tetrahedra. | `false` |
 | `--help` | No | Print CLI help. | |
-
-## Build With CoreToolkit
-
-```bash
-cd /path/to/voltlabs-ecosystem/tools/CoreToolkit
-conan create . -nr
-
-cd /path/to/voltlabs-ecosystem/plugins/StructureIdentification
-conan create . -nr
-
-cd /path/to/voltlabs-ecosystem/plugins/OpenDXA
-conan create . -nr
-```
 
 ## Overview
 
