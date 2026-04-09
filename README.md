@@ -5,6 +5,43 @@ It is decoupled from the upstream structure-identification algorithm, but it is 
 agnostic to lattice geometry: the matrix phase must exist as a reference lattice
 definition under `OpenDXA/lattices` or in a runtime lattice directory.
 
+## OpenDXA CLI
+
+Usage:
+
+```bash
+opendxa <annotated.dump> [output_base] [options]
+```
+
+### Arguments
+
+| Argument | Required | Description | Default |
+| --- | --- | --- | --- |
+| `<annotated.dump>` | Yes | Annotated dump exported by an upstream producer. | |
+| `[output_base]` | No | Output basename. If omitted, OpenDXA derives it from the input dump path. | derived from input |
+| `--clusters-table <path>` | Yes | Path to `*_clusters.table`. | |
+| `--clusters-transitions <path>` | Yes | Path to `*_cluster_transitions.table`. | |
+| `--cluster-transitions <path>` | No | Accepted alias for `--clusters-transitions`. | |
+| `--reference-topology <name>` | Yes | Matrix-phase topology name resolved from OpenDXA lattice YAMLs. | |
+| `--lattice-dir <path>` | No | Directory containing OpenDXA lattice YAMLs. | compiled/package lattice directory |
+| `--maxTrialCircuitSize <int>` | No | Maximum Burgers circuit size. | `14` |
+| `--circuitStretchability <int>` | No | Circuit stretchability factor. | `9` |
+| `--lineSmoothingLevel <float>` | No | Smoothing applied to dislocation lines. | `1.0` |
+| `--linePointInterval <float>` | No | Point spacing along exported lines. | `2.5` |
+| `--ghost-layer-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance before building ghost atoms for the Delaunay tessellation. | `3.5` |
+| `--interface-alpha-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance when running the interface alpha-shape filter. | `5.0` |
+| `--inteface-alpha-scale <float>` | No | Accepted alias for `--interface-alpha-scale`. | |
+| `--crystal-path-steps <int>` | No | Maximum crystal path depth used while assigning ideal edge vectors. | `4` |
+| `--export-defect-mesh <bool>` | No | Enable or disable writing `*_defect_mesh.msgpack`. | `true` |
+| `--export-interface-mesh <bool>` | No | Enable or disable writing `*_interface_mesh.msgpack`. | `false` |
+| `--export-dislocations <bool>` | No | Enable or disable writing `*_dislocations.msgpack`. | `true` |
+| `--export-circuit-information <bool>` | No | Include `circuit_information` inside the dislocations msgpack. | `true` |
+| `--export-dislocation-network-stats <bool>` | No | Include `network_statistics` inside the dislocations msgpack. | `true` |
+| `--export-junctions <bool>` | No | Include `junction_information` inside the dislocations msgpack. | `true` |
+| `--clip-pbc-segments <bool>` | No | Clip exported dislocation polylines at periodic boundaries. If disabled, OpenDXA exports the raw traced lines. | `true` |
+| `--cover-domain-with-finite-tets <bool>` | No | Add helper points so the Delaunay domain is fully covered by finite tetrahedra. | `false` |
+| `--help` | No | Print CLI help. | |
+
 ## Overview
 
 OpenDXA consumes three files from the same snapshot:
@@ -121,43 +158,6 @@ Rules:
 - reverse duplicate rows are not required
 - self-transitions are not serialized
 - OpenDXA reconstructs reverse edges and self-transitions internally at import time
-
-## OpenDXA CLI
-
-Usage:
-
-```bash
-opendxa <annotated.dump> [output_base] [options]
-```
-
-### Arguments
-
-| Argument | Required | Description | Default |
-| --- | --- | --- | --- |
-| `<annotated.dump>` | Yes | Annotated dump exported by an upstream producer. | |
-| `[output_base]` | No | Output basename. If omitted, OpenDXA derives it from the input dump path. | derived from input |
-| `--clusters-table <path>` | Yes | Path to `*_clusters.table`. | |
-| `--clusters-transitions <path>` | Yes | Path to `*_cluster_transitions.table`. | |
-| `--cluster-transitions <path>` | No | Accepted alias for `--clusters-transitions`. | |
-| `--reference-topology <name>` | Yes | Matrix-phase topology name resolved from OpenDXA lattice YAMLs. | |
-| `--lattice-dir <path>` | No | Directory containing OpenDXA lattice YAMLs. | compiled/package lattice directory |
-| `--maxTrialCircuitSize <int>` | No | Maximum Burgers circuit size. | `14` |
-| `--circuitStretchability <int>` | No | Circuit stretchability factor. | `9` |
-| `--lineSmoothingLevel <float>` | No | Smoothing applied to dislocation lines. | `1.0` |
-| `--linePointInterval <float>` | No | Point spacing along exported lines. | `2.5` |
-| `--ghost-layer-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance before building ghost atoms for the Delaunay tessellation. | `3.5` |
-| `--interface-alpha-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance when running the interface alpha-shape filter. | `5.0` |
-| `--inteface-alpha-scale <float>` | No | Accepted alias for `--interface-alpha-scale`. | |
-| `--crystal-path-steps <int>` | No | Maximum crystal path depth used while assigning ideal edge vectors. | `4` |
-| `--export-defect-mesh <bool>` | No | Enable or disable writing `*_defect_mesh.msgpack`. | `true` |
-| `--export-interface-mesh <bool>` | No | Enable or disable writing `*_interface_mesh.msgpack`. | `false` |
-| `--export-dislocations <bool>` | No | Enable or disable writing `*_dislocations.msgpack`. | `true` |
-| `--export-circuit-information <bool>` | No | Include `circuit_information` inside the dislocations msgpack. | `true` |
-| `--export-dislocation-network-stats <bool>` | No | Include `network_statistics` inside the dislocations msgpack. | `true` |
-| `--export-junctions <bool>` | No | Include `junction_information` inside the dislocations msgpack. | `true` |
-| `--clip-pbc-segments <bool>` | No | Clip exported dislocation polylines at periodic boundaries. If disabled, OpenDXA exports the raw traced lines. | `true` |
-| `--cover-domain-with-finite-tets <bool>` | No | Add helper points so the Delaunay domain is fully covered by finite tetrahedra. | `false` |
-| `--help` | No | Print CLI help. | |
 
 ## Upstream Producers
 
