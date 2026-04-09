@@ -16,6 +16,7 @@ void showUsage(const std::string& name) {
         << "  --clusters-table <path>           Path to *_clusters.table exported by CNA/PTM.\n"
         << "  --clusters-transitions <path>     Path to *_cluster_transitions.table exported by CNA/PTM.\n"
         << "  --reference-topology <name>       Topology name/alias from OpenDXA YAML definitions for the matrix phase.\n"
+        << "  --lattice-dir <path>              Directory containing OpenDXA lattice YAMLs.\n"
         << "  --maxTrialCircuitSize <int>       Maximum Burgers circuit size. [default: 14]\n"
         << "  --circuitStretchability <int>     Circuit stretchability factor. [default: 9]\n"
         << "  --lineSmoothingLevel <float>      Line smoothing level. [default: 1]\n"
@@ -41,6 +42,11 @@ int main(int argc, char* argv[]) {
     spdlog::info("Output base: {}", outputBase);
     
     DislocationAnalysis analyzer;
+    const std::string latticeDirectory = getString(opts, "--lattice-dir", "");
+    if(!latticeDirectory.empty()){
+        setCrystalTopologySearchRoot(latticeDirectory);
+        spdlog::info("Using lattice directory: {}", latticeDirectory);
+    }
     if(!hasOption(opts, "--reference-topology")){
         spdlog::error("Missing required option --reference-topology");
         return 1;

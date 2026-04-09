@@ -1,26 +1,57 @@
-# OpenDXA
+# Open-Source and Modular Implementation of the Dislocation Extraction Algorithm (DXA)
 
-OpenDXA is fully decoupled from the upstream structure-identification method. It expects a reconstructed-structure package generated from the same snapshot:
+`OpenDXA` performs dislocation analysis from a crystal-state package.
+It is decoupled from the upstream structure-identification algorithm, but it is not
+agnostic to lattice geometry: the matrix phase must exist as a reference lattice
+definition under `OpenDXA/lattices` or in a runtime lattice directory.
 
-1. An annotated LAMMPS dump file
-2. A `*_clusters.table` file
-3. A `*_cluster_transitions.table` file
+## Overview
 
-As long as those three files respect the contract below, OpenDXA does not need to know whether the upstream producer was CNA, PTM, or another compatible implementation.
+OpenDXA consumes three files from the same snapshot:
 
-## Required CLI Inputs
+1. An annotated LAMMPS dump
+2. A `*_clusters.table`
+3. A `*_cluster_transitions.table`
 
-OpenDXA requires:
+Those files are currently exported by:
 
-- `--clusters-table <path>`
-- `--clusters-transitions <path>`
-- `--reference-topology <name>`
+- [CommonNeighborAnalysis](https://github.com/VoltLabs-Research/CommonNeighborAnalysis)
+- [PolyhedralTemplateMatching](https://github.com/VoltLabs-Research/PolyhedralTemplateMatching)
+- [PatternStructureMatching](https://github.com/VoltLabs-Research/PatternStructureMatching)
 
-`--reference-topology` must match the YAML-driven topology name of the matrix phase, for example `fcc`, `bcc`, `hcp`, or `cubic_diamond`.
+If the producer respects the contract documented below, OpenDXA can consume it.
 
-## Annotated Dump Requirements
+## OpenDXA Reference Lattices
 
-The annotated dump must be a valid LAMMPS dump frame with atomic positions and these headers:
+OpenDXA resolves the matrix phase by `topology_name`.
+Reference lattices are loaded from YAML files under `OpenDXA/lattices`.
+
+Each OpenDXA lattice YAML currently contains only:
+
+- `name`
+- `coordination_number`
+- `neighbor_vectors`
+
+### Lattice Search Path
+
+OpenDXA resolves reference lattices in this order:
+
+1. `--lattice-dir`, when provided
+2. The compile-time source lattice directory
+3. `share/volt/lattices` relative to the executable/package
+
+This means you can test new OpenDXA lattice YAMLs at runtime without recompiling by
+passing `--lattice-dir /path/to/lattices`.
+
+## Required Contract
+
+OpenDXA expects the annotated dump, clusters table, and transitions table to come
+from the same frame and to reference the same cluster IDs and topology names.
+
+### Annotated Dump
+
+The annotated dump must be a valid single-frame LAMMPS dump with at least these
+headers:
 
 - `ITEM: TIMESTEP`
 - `ITEM: NUMBER OF ATOMS`
@@ -28,102 +59,218 @@ The annotated dump must be a valid LAMMPS dump frame with atomic positions and t
 - `ITEM: BOX BOUNDS`
 - `ITEM: ATOMS ...`
 
-`ITEM: MAXIMUM NEIGHBOR DISTANCE` is required by OpenDXA and must already be written by the upstream structural-analysis step.
+`ITEM: MAXIMUM NEIGHBOR DISTANCE` is required by OpenDXA. It is used to derive
+core geometric tolerances during reconstruction:
 
-This value is used as the characteristic neighborhood length scale of the reconstructed structure:
+- Delaunay ghost layer size: `3.5 * maximumNeighborDistance`
+- Interface mesh alpha: `5.0 * maximumNeighborDistance`
 
-- Delaunay tessellation uses `ghostLayerSize = 3.5 * maximumNeighborDistance`
-- Interface-mesh construction uses `alpha = 5.0 * maximumNeighborDistance`
+The `ITEM: ATOMS` section must include:
 
-Upstream producers currently generate it as follows:
-
-- CNA: maximum local neighbor distance observed while classifying atoms and building ordered neighbor lists
-- PTM: maximum minimum-image neighbor distance found by scanning the reconstructed PTM neighbor list
-
-### Required Per-Atom Columns
-
-The `ITEM: ATOMS` section must include the atom positions together with these reconstructed columns:
-
+- atom coordinates
 - `cluster_id`
 - `neighbor_counts`
-- `neighbor_indices_0` ... `neighbor_indices_15`
-- `neighbor_lattice_x_0`, `neighbor_lattice_y_0`, `neighbor_lattice_z_0`, ... `neighbor_lattice_x_15`, `neighbor_lattice_y_15`, `neighbor_lattice_z_15`
+- `neighbor_indices_0` ... `neighbor_indices_17`
+- `neighbor_lattice_x_0`, `neighbor_lattice_y_0`, `neighbor_lattice_z_0`, ... `neighbor_lattice_x_17`, `neighbor_lattice_y_17`, `neighbor_lattice_z_17`
 
-The slot range ends at `15` because the reconstructed format reserves up to `16` neighbor slots per atom. `neighbor_counts` tells OpenDXA how many of those slots are valid for each atom.
+Meaning of the reconstructed columns:
 
-These columns mean:
-
-- `cluster_id`: cluster membership of the atom; `0` is the special no-cluster/defect label
+- `cluster_id`: cluster membership; `0` means no cluster / defect region
 - `neighbor_counts`: number of valid reconstructed neighbors for that atom
-- `neighbor_indices_k`: zero-based atom index of neighbor slot `k` in dump order, not the LAMMPS `id`
-- `neighbor_lattice_x_k`, `neighbor_lattice_y_k`, `neighbor_lattice_z_k`: components of the ideal neighbor lattice vector associated with slot `k`
+- `neighbor_indices_k`: zero-based atom index of slot `k`, in dump order
+- `neighbor_lattice_*_k`: ideal lattice-space vector assigned to slot `k`
 
-OpenDXA consumes them in this order:
+The current reconstructed format reserves up to `18` neighbor slots per atom.
 
-1. It rebuilds the reconstructed structure context from `cluster_id`, `neighbor_counts`, `neighbor_indices_*`, and `neighbor_lattice_*_*`
-2. It links `cluster_id` to the imported cluster graph from `*_clusters.table` and `*_cluster_transitions.table`
-3. It rebuilds the compact neighbor list used by neighbor queries and crystal-path traversal
-4. It uses `neighbor_lattice_*_*` as ideal lattice-space bond vectors during crystal path finding and elastic mapping
-5. It uses those bond vectors plus cluster transitions to construct the interface mesh and trace Burgers circuits
-
-## `*_clusters.table` Requirements
+### `*_clusters.table`
 
 The clusters table must contain:
 
 - `cluster_id`
 - `topology_name`
 
-Where:
+It may also contain the optional orientation matrix columns:
 
-- `cluster_id`: unique cluster identifier referenced by the dump's per-atom `cluster_id`
-- `topology_name`: topology identifier assigned to that cluster by the upstream structural-analysis step
+- `orientation_00` ... `orientation_22`
 
-`--reference-topology` must match the `topology_name` value used by the matrix phase clusters.
+Rules:
+
+- `cluster_id` must match the `cluster_id` written into the annotated dump
+- `topology_name` must match an OpenDXA lattice `name`
+- the matrix phase passed as `--reference-topology` must match the dominant matrix `topology_name`
 
 Examples:
 
-- FCC matrix -> `--reference-topology fcc`
-- BCC matrix -> `--reference-topology bcc`
-- Cubic diamond matrix -> `--reference-topology cubic_diamond`
+- FCC matrix: `--reference-topology fcc`
+- BCC matrix: `--reference-topology bcc`
+- FCT matrix: `--reference-topology fct`
 
-## YAML-Driven Topology Contract
-
-Crystal topology now comes from the OpenDXA topology registry loaded from YAML files under `OpenDXA/lattices`.
-
-That shared registry provides:
-
-- canonical neighbor vectors
-- derived common-neighbor graph
-- symmetry permutations generated at runtime from `neighbor_vectors`
-- stable topology identity by name
-
-OpenDXA does not need hardcoded neighbor vectors in its own code path. It consumes the reconstructed dump plus cluster graph, and resolves the matrix phase through the shared YAML topology name.
-
-The tetragonal reference lattices `bct`, `fct`, and `st` can be regenerated from Atomsk with:
-
-```bash
-python3 tools/generate_tetragonal_lattices_from_atomsk.py /path/to/atomsk
-```
-
-## `*_cluster_transitions.table` Requirements
+### `*_cluster_transitions.table`
 
 The transitions table must contain:
 
 - `cluster1_id`
 - `cluster2_id`
-- `tm_00`, `tm_01`, `tm_02`
-- `tm_10`, `tm_11`, `tm_12`
-- `tm_20`, `tm_21`, `tm_22`
+- `tm_00` ... `tm_22`
 - `distance`
 
 Where:
 
-- `cluster1_id` and `cluster2_id`: directed edge in the reconstructed cluster graph
-- `tm_00` ... `tm_22`: entries of the `3 x 3` transition matrix between the two clusters
-- `distance`: graph distance associated with that transition
+- `cluster1_id` and `cluster2_id` define a directed cluster-graph edge
+- `tm_00` ... `tm_22` define the `3x3` transition matrix between clusters
+- `distance` is the graph distance assigned to that transition
 
-## Installation
+## OpenDXA CLI
+
+Usage:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/voltlabs-research/CoreToolkit/main/scripts/install.sh | bash
+opendxa <annotated.dump> [output_base] [options]
 ```
+
+### Arguments
+
+| Argument | Required | Description | Default |
+| --- | --- | --- | --- |
+| `<annotated.dump>` | Yes | Annotated dump exported by an upstream producer. | |
+| `[output_base]` | No | Output basename. If omitted, OpenDXA derives it from the input dump path. | derived from input |
+| `--clusters-table <path>` | Yes | Path to `*_clusters.table`. | |
+| `--clusters-transitions <path>` | Yes | Path to `*_cluster_transitions.table`. | |
+| `--cluster-transitions <path>` | No | Accepted alias for `--clusters-transitions`. | |
+| `--reference-topology <name>` | Yes | Matrix-phase topology name resolved from OpenDXA lattice YAMLs. | |
+| `--lattice-dir <path>` | No | Directory containing OpenDXA lattice YAMLs. | compiled/package lattice directory |
+| `--maxTrialCircuitSize <int>` | No | Maximum Burgers circuit size. | `14` |
+| `--circuitStretchability <int>` | No | Circuit stretchability factor. | `9` |
+| `--lineSmoothingLevel <float>` | No | Smoothing applied to dislocation lines. | `1.0` |
+| `--linePointInterval <float>` | No | Point spacing along exported lines. | `2.5` |
+| `--help` | No | Print CLI help. | |
+
+## Upstream Producers
+
+### CommonNeighborAnalysis
+
+Repository:
+[VoltLabs-Research/CommonNeighborAnalysis](https://github.com/VoltLabs-Research/CommonNeighborAnalysis)
+
+Supported input structures:
+
+- `FCC`
+- `BCC`
+- `HCP`
+- `CUBIC_DIAMOND`
+- `HEX_DIAMOND`
+
+### PolyhedralTemplateMatching
+
+Repository:
+[VoltLabs-Research/PolyhedralTemplateMatching](https://github.com/VoltLabs-Research/PolyhedralTemplateMatching)
+
+Supported input structures:
+
+- `SC`
+- `FCC`
+- `HCP`
+- `BCC`
+- `CUBIC_DIAMOND`
+- `HEX_DIAMOND`
+
+### PatternStructureMatching
+
+Repository:
+[VoltLabs-Research/PatternStructureMatching](https://github.com/VoltLabs-Research/PatternStructureMatching)
+
+PatternStructureMatching uses dynamic lattice YAMLs instead of a fixed compiled list.
+It still exports the same reconstructed-state contract that OpenDXA expects.
+
+Supported CLI parameters:
+
+- `--lattice-dir <path>`
+- `--reference-lattice-dir <path>`
+- `--patterns <csv>`
+- `--dissolveSmallClusters`
+
+#### Currently Supported PatternStructureMatching Lattices
+
+| Lattice | Coordination Number |
+| --- | ---: |
+| `9R` | 12 |
+| `L12` | 12 |
+| `a7` | 6 |
+| `bcc` | 14 |
+| `bct` | 12 |
+| `cubic_diamond` | 16 |
+| `fcc` | 12 |
+| `fct` | 16 |
+| `hcp` | 12 |
+| `hex_diamond` | 16 |
+| `omega` | 14 |
+| `sc` | 6 |
+| `st` | 10 |
+
+#### Adding a New PatternStructureMatching Lattice
+
+To add a new lattice to PatternStructureMatching:
+
+1. Create `plugins/PatternStructureMatching/lattices/<name>.yml`
+2. Define:
+   - `name`
+   - `coordination_number`
+   - `cell`
+   - `coordinate_mode`
+   - `basis`
+3. Run PatternStructureMatching with:
+   - `--lattice-dir /path/to/PatternStructureMatching/lattices`
+   - `--patterns <name>`
+
+Minimal example:
+
+```yml
+name: my_lattice
+coordination_number: 8
+
+cell:
+  - [1.0, 0.0, 0.0]
+  - [0.0, 1.0, 0.0]
+  - [0.0, 0.0, 1.0]
+
+coordinate_mode: fractional
+
+basis:
+  - species: 1
+    position: [0.0, 0.0, 0.0]
+```
+
+#### Making a New PatternStructureMatching Lattice Usable by OpenDXA
+
+If the new PatternStructureMatching lattice should also be consumable by OpenDXA:
+
+1. Create `plugins/OpenDXA/lattices/<name>.yml`
+2. Define:
+   - `name`
+   - `coordination_number`
+   - `neighbor_vectors`
+3. Run OpenDXA with `--lattice-dir /path/to/OpenDXA/lattices`
+4. Ensure the upstream `topology_name` matches the same `<name>`
+
+Minimal OpenDXA example:
+
+```yml
+name: my_lattice
+coordination_number: 8
+
+neighbor_vectors:
+  - [1.0, 0.0, 0.0]
+  - [-1.0, 0.0, 0.0]
+  - [0.0, 1.0, 0.0]
+  - [0.0, -1.0, 0.0]
+  - [0.0, 0.0, 1.0]
+  - [0.0, 0.0, -1.0]
+  - [1.0, 1.0, 0.0]
+  - [-1.0, -1.0, 0.0]
+```
+
+No OpenDXA code changes are required as long as:
+
+- the producer emits a compatible reconstructed-state package
+- `topology_name` matches the YAML `name`
+- the matrix phase passed to `--reference-topology` exists in the OpenDXA lattice directory
