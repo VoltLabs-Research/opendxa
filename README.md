@@ -41,6 +41,19 @@ opendxa <annotated.dump> [output_base] [options]
 | `--cover-domain-with-finite-tets <bool>` | No | Add helper points so the Delaunay domain is fully covered by finite tetrahedra. | `false` |
 | `--help` | No | Print CLI help. | |
 
+## Build With CoreToolkit
+
+```bash
+cd /path/to/voltlabs-ecosystem/tools/CoreToolkit
+conan create . -nr
+
+cd /path/to/voltlabs-ecosystem/plugins/StructureIdentification
+conan create . -nr
+
+cd /path/to/voltlabs-ecosystem/plugins/OpenDXA
+conan create . -nr
+```
+
 ## Overview
 
 OpenDXA consumes three files from the same snapshot:
