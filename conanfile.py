@@ -17,7 +17,7 @@ class OpenDXAConan(ConanFile):
         "spdlog/1.14.1",
         "nlohmann_json/3.11.3",
     )
-    exports_sources = "CMakeLists.txt", "include/*", "src/*"
+    exports_sources = "CMakeLists.txt", "include/*", "src/*", "lattices/*", "lattices/**/*"
 
     def layout(self):
         cmake_layout(self)

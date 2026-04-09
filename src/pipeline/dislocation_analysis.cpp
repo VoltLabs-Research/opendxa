@@ -21,8 +21,7 @@ namespace Volt{
 using namespace Volt::Particles;
 
 DislocationAnalysis::DislocationAnalysis()
-    : _referenceStructureLabel(0),
-      _maxTrialCircuitSize(14),
+    : _maxTrialCircuitSize(14),
       _circuitStretchability(9),
       _lineSmoothingLevel(10),
       _linePointInterval(2.5){}
@@ -92,7 +91,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     );
 
     tracer.traceDislocationSegments();
-    tracer.finishDislocationSegments(_referenceStructureLabel);
+    tracer.finishDislocationSegments(_referenceTopologyName);
 
     DislocationNetwork& network = tracer.network();
     spdlog::info("Found {} dislocation segments", network.segments().size());

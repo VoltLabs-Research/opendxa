@@ -2,7 +2,6 @@
 #include <volt/helpers/burgers_circuit.h>
 #include <cassert>
 #include <functional>
-#include <iomanip>
 #include <numeric>
 #include <unordered_set>
 #include <algorithm>
@@ -29,7 +28,6 @@ Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
 
 using namespace Detail;
 
-std::string getBurgersVectorString(const Vector3& burgers);
 json getNetworkStatistics(const DislocationNetwork* network, double cellVolume);
 json getJunctionInformation(const DislocationNetwork* network);
 json getCircuitInformation(const DislocationNetwork* network);
@@ -167,7 +165,6 @@ json buildDislocationsJson(
             {"magnitude", burgersLocal.length()}
         };
         segmentJson["magnitude"] = burgersLocal.length();
-        segmentJson["fractional"] = getBurgersVectorString(burgersLocal);
 
         dataArray.push_back(segmentJson);
 
@@ -343,13 +340,6 @@ json buildDefectMeshJson(
     bool includeTopologyInfo
 ){
     return buildMeshJson(interfaceMesh, structureAnalysis, includeTopologyInfo, &interfaceMesh);
-}
-
-std::string getBurgersVectorString(const Vector3& burgers){
-    std::ostringstream oss;
-    oss << std::fixed << std::setprecision(3);
-    oss << "[" << burgers.x() << " " << burgers.y() << " " << burgers.z() << "]";
-    return oss.str();
 }
 
 json getNetworkStatistics(const DislocationNetwork* network, double cellVolume){

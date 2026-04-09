@@ -55,7 +55,7 @@ set(LOCAL_STRUCTURE_IDENTIFICATION_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../Structure
 set(LOCAL_STRUCTURE_IDENTIFICATION_LIB
 	"${CMAKE_SOURCE_DIR}/../StructureIdentification/build-local/build/Release/libstructure-identification.a"
 )
-set(LOCAL_CORETOOLKIT_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../CoreToolkit/include")
+set(LOCAL_CORETOOLKIT_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../../tools/CoreToolkit/include")
 
 set(OPENDXA_STRUCTURE_IDENTIFICATION_TARGET structure-identification::structure-identification)
 if(EXISTS "${LOCAL_STRUCTURE_IDENTIFICATION_LIB}")
@@ -88,8 +88,8 @@ if(EXISTS "${LOCAL_CORETOOLKIT_INCLUDE_DIR}")
 endif()
 
 target_include_directories(${PROJECT_NAME}_lib BEFORE PUBLIC
-	${CORETOOLKIT_INCLUDE_DIRS}
 	${STRUCTURE_IDENTIFICATION_INCLUDE_DIRS}
+	${CORETOOLKIT_INCLUDE_DIRS}
 	${CMAKE_SOURCE_DIR}/../CoreToolkit/dependencies/geogram
 	${CMAKE_SOURCE_DIR}/include
 )
@@ -115,3 +115,4 @@ install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 
 install(TARGETS ${PROJECT_NAME}_lib DESTINATION lib)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION include)
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/lattices/ DESTINATION share/volt/lattices)

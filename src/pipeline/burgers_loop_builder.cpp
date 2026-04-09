@@ -78,7 +78,7 @@ void BurgersLoopBuilder::discardCircuit(BurgersCircuit* circuit){
 // Finalize all traced segments. Trim preliminary points, re-express Burgers
 // vectors in the target crystal structure and orient each line so
 // it points consistently.
-void BurgersLoopBuilder::finishDislocationSegments(int referenceStructureLabel){
+void BurgersLoopBuilder::finishDislocationSegments(std::string_view referenceTopologyName){
     auto& segs = network().segments();
 
     tbb::parallel_for(tbb::blocked_range<size_t>(0, segs.size()), 
@@ -105,9 +105,9 @@ void BurgersLoopBuilder::finishDislocationSegments(int referenceStructureLabel){
             for(size_t i = r.begin(); i != r.end(); ++i){
                 auto* s = segs[i];
                 auto* orig = s->burgersVector.cluster();
-                if(orig->structure != referenceStructureLabel){
+                if(orig->topologyName != referenceTopologyName){
                     for(auto* t = orig->transitions; t && t->distance <= 1; t = t->next){
-                        if(t->cluster2->structure == referenceStructureLabel){
+                        if(t->cluster2->topologyName == referenceTopologyName){
                             s->burgersVector = ClusterVector(
                                 t->transform(s->burgersVector.localVec()),
                                 t->cluster2

@@ -1,0 +1,118 @@
+# -----------------------------------------------------------------------------
+# Cubic Diamond Lattice Reference
+# -----------------------------------------------------------------------------
+#
+# For additional examples, detailed explanations, and the full specification,
+# please refer to the official documentation:
+#
+#   https://docs.voltcloud.dev
+#   https://github.com/voltlabs-research/
+#
+# -----------------------------------------------------------------------------
+
+# Unique identifier for the lattice.
+name: cubic_diamond
+
+# Number of nearest neighbors per atom.
+coordination_number: 16
+
+# Relative vectors from the central atom to each of its neighbors.
+# These define the ideal local geometry.
+neighbor_vectors:
+  - [0.25, 0.25, 0.25]
+  - [0.25, -0.25, -0.25]
+  - [-0.25, -0.25, 0.25]
+  - [-0.25, 0.25, -0.25]
+  - [0, -0.5, 0.5]
+  - [0.5, 0.5, 0]
+  - [-0.5, 0, 0.5]
+  - [-0.5, 0.5, 0]
+  - [0, 0.5, 0.5]
+  - [0.5, -0.5, 0]
+  - [0.5, 0, 0.5]
+  - [0.5, 0, -0.5]
+  - [-0.5, -0.5, 0]
+  - [0, -0.5, -0.5]
+  - [0, 0.5, -0.5]
+  - [-0.5, 0, -0.5]
+  - [0.25, -0.25, 0.25]
+  - [0.25, 0.25, -0.25]
+  - [-0.25, 0.25, 0.25]
+  - [-0.25, -0.25, -0.25]
+
+# Symmetry operations acting on the local neighborhood.
+# Each operation defines:
+#   - a 3x3 transformation matrix
+#   - how neighbor indices are permuted under that transformation
+symmetry_permutations:
+  - transformation:
+      - [1, 0, 0]
+      - [0, 1, 0]
+      - [0, 0, 1]
+    permutation: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+  - transformation:
+      - [1, 0, 0]
+      - [0, -1, 0]
+      - [0, 0, -1]
+    permutation: [1, 0, 3, 2, 14, 9, 15, 12, 13, 5, 11, 10, 7, 8, 4, 6]
+
+  - transformation:
+      - [-1, 0, 0]
+      - [0, 1, 0]
+      - [0, 0, -1]
+    permutation: [3, 2, 1, 0, 13, 7, 11, 5, 14, 12, 15, 6, 9, 4, 8, 10]
+
+  - transformation:
+      - [-1, 0, 0]
+      - [0, -1, 0]
+      - [0, 0, 1]
+    permutation: [2, 3, 0, 1, 8, 12, 10, 9, 4, 7, 6, 15, 5, 14, 13, 11]
+
+  - transformation:
+      - [0, 0, 1]
+      - [1, 0, 0]
+      - [0, 1, 0]
+    permutation: [0, 3, 1, 2, 11, 8, 9, 4, 10, 14, 5, 7, 13, 15, 6, 12]
+
+  - transformation:
+      - [0, 0, -1]
+      - [1, 0, 0]
+      - [0, -1, 0]
+    permutation: [3, 0, 2, 1, 6, 14, 12, 13, 15, 8, 7, 5, 4, 10, 11, 9]
+
+  - transformation:
+      - [0, 0, -1]
+      - [-1, 0, 0]
+      - [0, 1, 0]
+    permutation: [2, 1, 3, 0, 15, 4, 7, 8, 6, 13, 12, 9, 14, 11, 10, 5]
+
+  - transformation:
+      - [0, 0, 1]
+      - [-1, 0, 0]
+      - [0, -1, 0]
+    permutation: [1, 2, 0, 3, 10, 13, 5, 14, 11, 4, 9, 12, 8, 6, 15, 7]
+
+  - transformation:
+      - [0, 1, 0]
+      - [0, 0, 1]
+      - [1, 0, 0]
+    permutation: [0, 2, 3, 1, 7, 10, 14, 11, 5, 6, 8, 4, 15, 12, 9, 13]
+
+  - transformation:
+      - [0, -1, 0]
+      - [0, 0, -1]
+      - [1, 0, 0]
+    permutation: [2, 0, 1, 3, 9, 6, 13, 15, 12, 10, 4, 8, 11, 5, 7, 14]
+
+  - transformation:
+      - [0, 1, 0]
+      - [0, 0, -1]
+      - [-1, 0, 0]
+    permutation: [1, 3, 2, 0, 12, 11, 4, 10, 9, 15, 13, 14, 6, 7, 5, 8]
+
+  - transformation:
+      - [0, -1, 0]
+      - [0, 0, 1]
+      - [-1, 0, 0]
+    permutation: [3, 1, 0, 2, 5, 15, 8, 6, 7, 11, 14, 13, 10, 9, 12, 4]

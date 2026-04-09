@@ -16,7 +16,7 @@ OpenDXA requires:
 - `--clusters-transitions <path>`
 - `--reference-topology <name>`
 
-`--reference-topology` must match the POSCAR-driven topology name of the matrix phase, for example `fcc`, `bcc`, `hcp`, or `diamond`.
+`--reference-topology` must match the YAML-driven topology name of the matrix phase, for example `fcc`, `bcc`, `hcp`, or `cubic_diamond`.
 
 ## Annotated Dump Requirements
 
@@ -73,15 +73,10 @@ The clusters table must contain:
 - `cluster_id`
 - `topology_name`
 
-It may also include:
-
-- `structure_type`
-
 Where:
 
 - `cluster_id`: unique cluster identifier referenced by the dump's per-atom `cluster_id`
-- `topology_name`: POSCAR-driven topology identifier assigned to that cluster
-- `structure_type`: optional legacy numeric label assigned to that cluster
+- `topology_name`: topology identifier assigned to that cluster by the upstream structural-analysis step
 
 `--reference-topology` must match the `topology_name` value used by the matrix phase clusters.
 
@@ -89,23 +84,20 @@ Examples:
 
 - FCC matrix -> `--reference-topology fcc`
 - BCC matrix -> `--reference-topology bcc`
-- Cubic diamond matrix -> `--reference-topology diamond`
+- Cubic diamond matrix -> `--reference-topology cubic_diamond`
 
-If a producer still uses the legacy label path, `structure_type` may be used as a compatibility fallback, but it is no longer the source of truth for topology selection.
+## YAML-Driven Topology Contract
 
-## POSCAR-Driven Topology Contract
-
-Crystal topology now comes from the shared topology registry generated from embedded metadata in the lattice POSCAR files under `CoreToolkit/topologies`.
+Crystal topology now comes from the OpenDXA topology registry loaded from YAML files under `OpenDXA/lattices`.
 
 That shared registry provides:
 
-- primitive-cell basis
 - canonical neighbor vectors
 - explicit common-neighbor graph
 - symmetry permutations
 - stable topology identity by name
 
-OpenDXA does not need hardcoded lattice vectors in its own code path. It consumes the reconstructed dump plus cluster graph, and resolves the matrix phase through the shared POSCAR-driven topology name.
+OpenDXA does not need hardcoded neighbor vectors in its own code path. It consumes the reconstructed dump plus cluster graph, and resolves the matrix phase through the shared YAML topology name.
 
 ## `*_cluster_transitions.table` Requirements
 

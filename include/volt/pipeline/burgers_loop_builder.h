@@ -7,6 +7,7 @@
 #include <boost/random/uniform_int_distribution.hpp>
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_int.hpp>
+#include <string_view>
 
 namespace Volt{
 
@@ -42,7 +43,7 @@ public:
 	}
 
 	bool traceDislocationSegments();
-	void finishDislocationSegments(int referenceStructureLabel);
+	void finishDislocationSegments(std::string_view referenceTopologyName);
 
 	const std::vector<DislocationNode*>& danglingNodes() const{
 		return _danglingNodes;

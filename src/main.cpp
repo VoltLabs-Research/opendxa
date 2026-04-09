@@ -15,7 +15,7 @@ void showUsage(const std::string& name) {
     std::cerr
         << "  --clusters-table <path>           Path to *_clusters.table exported by CNA/PTM.\n"
         << "  --clusters-transitions <path>     Path to *_cluster_transitions.table exported by CNA/PTM.\n"
-        << "  --reference-topology <name>       Topology name/alias from POSCAR metadata for the reference matrix phase.\n"
+        << "  --reference-topology <name>       Topology name/alias from OpenDXA YAML definitions for the matrix phase.\n"
         << "  --maxTrialCircuitSize <int>       Maximum Burgers circuit size. [default: 14]\n"
         << "  --circuitStretchability <int>     Circuit stretchability factor. [default: 9]\n"
         << "  --lineSmoothingLevel <float>      Line smoothing level. [default: 1]\n"
@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    analyzer.setReferenceStructureLabel(topology->structureType);
+    analyzer.setReferenceTopology(topology->name);
     analyzer.setMaxTrialCircuitSize(getInt(opts, "--maxTrialCircuitSize", 14));
     analyzer.setCircuitStretchability(getInt(opts, "--circuitStretchability", 9));
     analyzer.setLineSmoothingLevel(getDouble(opts, "--lineSmoothingLevel", 1.0));

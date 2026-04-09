@@ -4,6 +4,7 @@
 #include <volt/core/lammps_parser.h>
 
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace Volt {
@@ -14,8 +15,8 @@ public:
 
     void compute(const LammpsParser::Frame &frame, const std::string& jsonOutputFile = "");
 
-    void setReferenceStructureLabel(int label){
-        _referenceStructureLabel = label;
+    void setReferenceTopology(std::string topologyName){
+        _referenceTopologyName = std::move(topologyName);
     }
 
     void setMaxTrialCircuitSize(double size){
@@ -43,7 +44,7 @@ public:
     }
 
 private:
-    int _referenceStructureLabel;
+    std::string _referenceTopologyName;
 
     double _maxTrialCircuitSize;
     double _circuitStretchability;
