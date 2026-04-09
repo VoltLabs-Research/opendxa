@@ -117,7 +117,8 @@ void clipDislocationLine(
 
 json buildDislocationsJson(
     const DislocationNetwork* network, 
-    const SimulationCell* simulationCell
+    const SimulationCell* simulationCell,
+    const DislocationsExportOptions& options
 ){
     json dislocations;
     const auto& segments = network->segments();
@@ -176,7 +177,7 @@ json buildDislocationsJson(
 
     for(size_t segmentId = 0; segmentId < validSegments.size(); ++segmentId){
         const auto* segment = validSegments[segmentId];
-        if(simulationCell){
+        if(simulationCell && options.clipPbcSegments){
             std::vector<Point3> currentChunk;
             clipDislocationLine(segment->line, *simulationCell, 
                 [&](const Point3& p1, const Point3& p2, bool isInitialSegment){
@@ -218,9 +219,13 @@ json buildDislocationsJson(
     dislocations["sub_listings"] = { { "dislocation_segments", dataArray } };
     dislocations["export"]["DislocationExporter"]["segments"] = dataArray;
 
-    dislocations["sub_listings"]["junction_information"] = getJunctionInformation(network);
-    dislocations["sub_listings"]["circuit_information"] = getCircuitInformation(network);
-    if(simulationCell){
+    if(options.exportJunctions){
+        dislocations["sub_listings"]["junction_information"] = getJunctionInformation(network);
+    }
+    if(options.exportCircuitInformation){
+        dislocations["sub_listings"]["circuit_information"] = getCircuitInformation(network);
+    }
+    if(options.exportDislocationNetworkStats && simulationCell){
         dislocations["sub_listings"]["network_statistics"] = getNetworkStatistics(network, simulationCell->volume3D());
     }
 

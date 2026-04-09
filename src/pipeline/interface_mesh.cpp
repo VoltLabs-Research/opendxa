@@ -60,7 +60,7 @@ void InterfaceMesh::makeManifold(){
 // then carve out only those facets whose endpoints belongs to "compatible" clusters (as determined
 // by the elastic mapping). Faces that bridge incompatible clusters get omitted, leaving
 // a manifold of boundary faces.
-void InterfaceMesh::createMesh(double maxNeighborDist){
+void InterfaceMesh::createMesh(double maxNeighborDist, double alphaScale){
     _isCompletelyGood = true;
     _isCompletelyBad  = true;
 
@@ -116,7 +116,7 @@ void InterfaceMesh::createMesh(double maxNeighborDist){
     // We pad the ghost layer size by several neighbor distances to ensure
     // all relevant tetrahedra are built across the periodic box. The manifold
     // helper will call back into our lambdas to decide which test and faces to keep.
-    double alpha = 5.0 * maxNeighborDist;
+    double alpha = alphaScale * maxNeighborDist;
     ManifoldConstructionHelper<InterfaceMesh> helper{
         tessellation(),
         *this,

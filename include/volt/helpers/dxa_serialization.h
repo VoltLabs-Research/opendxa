@@ -10,9 +10,17 @@ namespace Volt::DxaSerialization{
 
 using json = nlohmann::json;
 
+struct DislocationsExportOptions{
+    bool clipPbcSegments = true;
+    bool exportCircuitInformation = true;
+    bool exportDislocationNetworkStats = true;
+    bool exportJunctions = true;
+};
+
 json buildDislocationsJson(
     const DislocationNetwork* network,
-    const SimulationCell* simulationCell = nullptr
+    const SimulationCell* simulationCell = nullptr,
+    const DislocationsExportOptions& options = {}
 );
 
 json buildMeshJson(

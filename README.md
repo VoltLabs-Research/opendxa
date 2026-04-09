@@ -55,32 +55,29 @@ headers:
 
 - `ITEM: TIMESTEP`
 - `ITEM: NUMBER OF ATOMS`
-- `ITEM: MAXIMUM NEIGHBOR DISTANCE`
 - `ITEM: BOX BOUNDS`
 - `ITEM: ATOMS ...`
 
-`ITEM: MAXIMUM NEIGHBOR DISTANCE` is required by OpenDXA. It is used to derive
-core geometric tolerances during reconstruction:
-
-- Delaunay ghost layer size: `3.5 * maximumNeighborDistance`
-- Interface mesh alpha: `5.0 * maximumNeighborDistance`
+OpenDXA now derives the maximum reconstructed neighbor distance at import time from
+the annotated atom positions and neighbor graph. It no longer requires a dedicated
+dump header for that value.
 
 The `ITEM: ATOMS` section must include:
 
 - atom coordinates
 - `cluster_id`
-- `neighbor_counts`
 - `neighbor_indices_0` ... `neighbor_indices_17`
 - `neighbor_lattice_x_0`, `neighbor_lattice_y_0`, `neighbor_lattice_z_0`, ... `neighbor_lattice_x_17`, `neighbor_lattice_y_17`, `neighbor_lattice_z_17`
 
 Meaning of the reconstructed columns:
 
 - `cluster_id`: cluster membership; `0` means no cluster / defect region
-- `neighbor_counts`: number of valid reconstructed neighbors for that atom
-- `neighbor_indices_k`: zero-based atom index of slot `k`, in dump order
+- `neighbor_indices_k`: zero-based atom index of slot `k`, in dump order; unused slots must be `-1`
 - `neighbor_lattice_*_k`: ideal lattice-space vector assigned to slot `k`
 
 The current reconstructed format reserves up to `18` neighbor slots per atom.
+OpenDXA derives the effective neighbor count for each atom from the first `-1`
+sentinel in the `neighbor_indices_*` slots.
 
 ### `*_clusters.table`
 
@@ -112,13 +109,18 @@ The transitions table must contain:
 - `cluster1_id`
 - `cluster2_id`
 - `tm_00` ... `tm_22`
-- `distance`
 
 Where:
 
-- `cluster1_id` and `cluster2_id` define a directed cluster-graph edge
+- `cluster1_id` and `cluster2_id` define an undirected direct cluster interface
 - `tm_00` ... `tm_22` define the `3x3` transition matrix between clusters
-- `distance` is the graph distance assigned to that transition
+
+Rules:
+
+- only direct interfaces are exported
+- reverse duplicate rows are not required
+- self-transitions are not serialized
+- OpenDXA reconstructs reverse edges and self-transitions internally at import time
 
 ## OpenDXA CLI
 
@@ -143,6 +145,18 @@ opendxa <annotated.dump> [output_base] [options]
 | `--circuitStretchability <int>` | No | Circuit stretchability factor. | `9` |
 | `--lineSmoothingLevel <float>` | No | Smoothing applied to dislocation lines. | `1.0` |
 | `--linePointInterval <float>` | No | Point spacing along exported lines. | `2.5` |
+| `--ghost-layer-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance before building ghost atoms for the Delaunay tessellation. | `3.5` |
+| `--interface-alpha-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance when running the interface alpha-shape filter. | `5.0` |
+| `--inteface-alpha-scale <float>` | No | Accepted alias for `--interface-alpha-scale`. | |
+| `--crystal-path-steps <int>` | No | Maximum crystal path depth used while assigning ideal edge vectors. | `4` |
+| `--export-defect-mesh <bool>` | No | Enable or disable writing `*_defect_mesh.msgpack`. | `true` |
+| `--export-interface-mesh <bool>` | No | Enable or disable writing `*_interface_mesh.msgpack`. | `false` |
+| `--export-dislocations <bool>` | No | Enable or disable writing `*_dislocations.msgpack`. | `true` |
+| `--export-circuit-information <bool>` | No | Include `circuit_information` inside the dislocations msgpack. | `true` |
+| `--export-dislocation-network-stats <bool>` | No | Include `network_statistics` inside the dislocations msgpack. | `true` |
+| `--export-junctions <bool>` | No | Include `junction_information` inside the dislocations msgpack. | `true` |
+| `--clip-pbc-segments <bool>` | No | Clip exported dislocation polylines at periodic boundaries. If disabled, OpenDXA exports the raw traced lines. | `true` |
+| `--cover-domain-with-finite-tets <bool>` | No | Add helper points so the Delaunay domain is fully covered by finite tetrahedra. | `false` |
 | `--help` | No | Print CLI help. | |
 
 ## Upstream Producers

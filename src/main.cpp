@@ -20,7 +20,19 @@ void showUsage(const std::string& name) {
         << "  --maxTrialCircuitSize <int>       Maximum Burgers circuit size. [default: 14]\n"
         << "  --circuitStretchability <int>     Circuit stretchability factor. [default: 9]\n"
         << "  --lineSmoothingLevel <float>      Line smoothing level. [default: 1]\n"
-        << "  --linePointInterval <float>       Point interval on dislocation lines. [default: 2.5]\n";
+        << "  --linePointInterval <float>       Point interval on dislocation lines. [default: 2.5]\n"
+        << "  --ghost-layer-scale <float>       Ghost-layer scale relative to max neighbor distance. [default: 3.5]\n"
+        << "  --interface-alpha-scale <float>   Interface alpha scale. [default: 5.0]\n"
+        << "  --inteface-alpha-scale <float>    Alias for --interface-alpha-scale.\n"
+        << "  --crystal-path-steps <int>        Maximum crystal path search depth. [default: 4]\n"
+        << "  --export-defect-mesh <bool>       Export defect mesh msgpack. [default: true]\n"
+        << "  --export-interface-mesh <bool>    Export interface mesh msgpack. [default: false]\n"
+        << "  --export-dislocations <bool>      Export dislocations msgpack. [default: true]\n"
+        << "  --export-circuit-information <bool> Export circuit statistics in dislocations msgpack. [default: true]\n"
+        << "  --export-dislocation-network-stats <bool> Export network statistics in dislocations msgpack. [default: true]\n"
+        << "  --export-junctions <bool>         Export junction information in dislocations msgpack. [default: true]\n"
+        << "  --clip-pbc-segments <bool>        Clip dislocation segments against PBC when exporting. [default: true]\n"
+        << "  --cover-domain-with-finite-tets <bool> Cover the domain with helper finite tetrahedra. [default: false]\n";
     printHelpOption();
 }
 
@@ -63,6 +75,21 @@ int main(int argc, char* argv[]) {
     analyzer.setCircuitStretchability(getInt(opts, "--circuitStretchability", 9));
     analyzer.setLineSmoothingLevel(getDouble(opts, "--lineSmoothingLevel", 1.0));
     analyzer.setLinePointInterval(getDouble(opts, "--linePointInterval", 2.5));
+    analyzer.setGhostLayerScale(getDouble(opts, "--ghost-layer-scale", 3.5));
+    analyzer.setInterfaceAlphaScale(getDouble(
+        opts,
+        "--interface-alpha-scale",
+        getDouble(opts, "--inteface-alpha-scale", 5.0)
+    ));
+    analyzer.setCrystalPathSteps(getInt(opts, "--crystal-path-steps", 4));
+    analyzer.setExportDefectMesh(getBool(opts, "--export-defect-mesh", true));
+    analyzer.setExportInterfaceMesh(getBool(opts, "--export-interface-mesh", false));
+    analyzer.setExportDislocations(getBool(opts, "--export-dislocations", true));
+    analyzer.setExportCircuitInformation(getBool(opts, "--export-circuit-information", true));
+    analyzer.setExportDislocationNetworkStats(getBool(opts, "--export-dislocation-network-stats", true));
+    analyzer.setExportJunctions(getBool(opts, "--export-junctions", true));
+    analyzer.setClipPbcSegments(getBool(opts, "--clip-pbc-segments", true));
+    analyzer.setCoverDomainWithFiniteTets(getBool(opts, "--cover-domain-with-finite-tets", false));
     analyzer.setClustersTablePath(getString(opts, "--clusters-table"));
     analyzer.setClusterTransitionsPath(
         getString(opts, "--clusters-transitions", getString(opts, "--cluster-transitions"))
