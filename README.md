@@ -93,11 +93,17 @@ Crystal topology now comes from the OpenDXA topology registry loaded from YAML f
 That shared registry provides:
 
 - canonical neighbor vectors
-- explicit common-neighbor graph
-- symmetry permutations
+- derived common-neighbor graph
+- symmetry permutations generated at runtime from `neighbor_vectors`
 - stable topology identity by name
 
 OpenDXA does not need hardcoded neighbor vectors in its own code path. It consumes the reconstructed dump plus cluster graph, and resolves the matrix phase through the shared YAML topology name.
+
+The tetragonal reference lattices `bct`, `fct`, and `st` can be regenerated from Atomsk with:
+
+```bash
+python3 tools/generate_tetragonal_lattices_from_atomsk.py /path/to/atomsk
+```
 
 ## `*_cluster_transitions.table` Requirements
 
