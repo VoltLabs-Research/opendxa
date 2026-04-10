@@ -1,0 +1,23 @@
+name: Publish Plugin OCI
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    uses: VoltLabs-Research/CoreToolkit/.github/workflows/build-plugin-oci.yml@main
+    with:
+      plugin_name: ${{ github.event.repository.name }}
+      plugin_binary: opendxa
+      dependency_repos: |
+        StructureIdentification
+    secrets: inherit
