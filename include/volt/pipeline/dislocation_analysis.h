@@ -63,6 +63,18 @@ public:
         _exportInterfaceMesh = exportInterfaceMesh;
     }
 
+    void setExportDelaunayTessellation(bool exportDelaunayTessellation){
+        _exportDelaunayTessellation = exportDelaunayTessellation;
+    }
+
+    void setExportStructureIdentification(bool exportStructureIdentification){
+        _exportStructureIdentification = exportStructureIdentification;
+    }
+
+    void setExportCoherentCrystallineRegions(bool exportCoherentCrystallineRegions){
+        _exportCoherentCrystallineRegions = exportCoherentCrystallineRegions;
+    }
+
     void setExportDislocations(bool exportDislocations){
         _exportDislocations = exportDislocations;
     }
@@ -100,6 +112,9 @@ private:
 
     bool _exportDefectMesh;
     bool _exportInterfaceMesh;
+    bool _exportDelaunayTessellation;
+    bool _exportStructureIdentification;
+    bool _exportCoherentCrystallineRegions;
     bool _exportDislocations;
     bool _exportCircuitInformation;
     bool _exportDislocationNetworkStats;

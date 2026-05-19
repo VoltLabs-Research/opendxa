@@ -27,6 +27,9 @@ void showUsage(const std::string& name) {
         << "  --crystal-path-steps <int>        Maximum crystal path search depth. [default: 4]\n"
         << "  --export-defect-mesh <bool>       Export defect mesh msgpack. [default: true]\n"
         << "  --export-interface-mesh <bool>    Export interface mesh msgpack. [default: false]\n"
+        << "  --export-delaunay-tessellation <bool> Export Delaunay tessellation msgpack. [default: false]\n"
+        << "  --export-structure-identification <bool> Export atoms.msgpack grouped by structure id/name. [default: false]\n"
+        << "  --export-coherent-crystalline-regions <bool> Export atoms grouped by coherent cluster id. [default: false]\n"
         << "  --export-dislocations <bool>      Export dislocations msgpack. [default: true]\n"
         << "  --export-circuit-information <bool> Export circuit statistics in dislocations msgpack. [default: true]\n"
         << "  --export-dislocation-network-stats <bool> Export network statistics in dislocations msgpack. [default: true]\n"
@@ -84,6 +87,9 @@ int main(int argc, char* argv[]) {
     analyzer.setCrystalPathSteps(getInt(opts, "--crystal-path-steps", 4));
     analyzer.setExportDefectMesh(getBool(opts, "--export-defect-mesh", true));
     analyzer.setExportInterfaceMesh(getBool(opts, "--export-interface-mesh", false));
+    analyzer.setExportDelaunayTessellation(getBool(opts, "--export-delaunay-tessellation", false));
+    analyzer.setExportStructureIdentification(getBool(opts, "--export-structure-identification", false));
+    analyzer.setExportCoherentCrystallineRegions(getBool(opts, "--export-coherent-crystalline-regions", false));
     analyzer.setExportDislocations(getBool(opts, "--export-dislocations", true));
     analyzer.setExportCircuitInformation(getBool(opts, "--export-circuit-information", true));
     analyzer.setExportDislocationNetworkStats(getBool(opts, "--export-dislocation-network-stats", true));
