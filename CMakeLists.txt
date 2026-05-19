@@ -37,6 +37,7 @@ find_package(TBB REQUIRED)
 find_package(Boost REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 set(OPENDXA_BOOST_TARGET "")
 if(TARGET Boost::headers)
@@ -51,56 +52,24 @@ else()
 	message(FATAL_ERROR "OpenDXA requires a Boost headers target")
 endif()
 
-set(LOCAL_STRUCTURE_IDENTIFICATION_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../StructureIdentification/include")
-set(LOCAL_STRUCTURE_IDENTIFICATION_LIB
-	"${CMAKE_SOURCE_DIR}/../StructureIdentification/build-local/build/Release/libstructure-identification.a"
-)
-set(LOCAL_CORETOOLKIT_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/../../tools/CoreToolkit/include")
-
-set(OPENDXA_STRUCTURE_IDENTIFICATION_TARGET structure-identification::structure-identification)
-if(EXISTS "${LOCAL_STRUCTURE_IDENTIFICATION_LIB}")
-	add_library(opendxa-local-structure-identification STATIC IMPORTED)
-	set_target_properties(opendxa-local-structure-identification PROPERTIES
-		IMPORTED_LOCATION "${LOCAL_STRUCTURE_IDENTIFICATION_LIB}"
-		INTERFACE_INCLUDE_DIRECTORIES "${LOCAL_STRUCTURE_IDENTIFICATION_INCLUDE_DIR}"
-		INTERFACE_LINK_LIBRARIES "coretoolkit::coretoolkit;TBB::tbb;${OPENDXA_BOOST_TARGET};spdlog::spdlog;nlohmann_json::nlohmann_json"
-	)
-	set(OPENDXA_STRUCTURE_IDENTIFICATION_TARGET opendxa-local-structure-identification)
-else()
-	find_package(structure-identification REQUIRED)
-endif()
+find_package(structure-identification REQUIRED)
 
 file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
 list(FILTER LIB_SOURCES EXCLUDE REGEX ".*main\\.cpp$")
 
-# Create static library with Volt code
 add_library(${PROJECT_NAME}_lib STATIC ${LIB_SOURCES})
 set_target_properties(${PROJECT_NAME}_lib PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-get_target_property(STRUCTURE_IDENTIFICATION_INCLUDE_DIRS ${OPENDXA_STRUCTURE_IDENTIFICATION_TARGET} INTERFACE_INCLUDE_DIRECTORIES)
-get_target_property(CORETOOLKIT_INCLUDE_DIRS coretoolkit::coretoolkit INTERFACE_INCLUDE_DIRECTORIES)
-
-if(EXISTS "${LOCAL_STRUCTURE_IDENTIFICATION_INCLUDE_DIR}")
-	list(PREPEND STRUCTURE_IDENTIFICATION_INCLUDE_DIRS "${LOCAL_STRUCTURE_IDENTIFICATION_INCLUDE_DIR}")
-endif()
-if(EXISTS "${LOCAL_CORETOOLKIT_INCLUDE_DIR}")
-	list(PREPEND CORETOOLKIT_INCLUDE_DIRS "${LOCAL_CORETOOLKIT_INCLUDE_DIR}")
-endif()
-
-target_include_directories(${PROJECT_NAME}_lib BEFORE PUBLIC
-	${STRUCTURE_IDENTIFICATION_INCLUDE_DIRS}
-	${CORETOOLKIT_INCLUDE_DIRS}
-	${CMAKE_SOURCE_DIR}/../CoreToolkit/dependencies/geogram
-	${CMAKE_SOURCE_DIR}/include
-)
+target_include_directories(${PROJECT_NAME}_lib PUBLIC ${CMAKE_SOURCE_DIR}/include)
 target_precompile_headers(${PROJECT_NAME}_lib PRIVATE <volt/core/volt.h>)
 target_link_libraries(${PROJECT_NAME}_lib PUBLIC
 	${OPENDXA_BOOST_TARGET}
 	TBB::tbb
-	${OPENDXA_STRUCTURE_IDENTIFICATION_TARGET}
+	structure-identification::structure-identification
 	coretoolkit::coretoolkit
 	spdlog::spdlog
 	nlohmann_json::nlohmann_json
+	yaml-cpp::yaml-cpp
 )
 
 add_executable(${PROJECT_NAME} ${CMAKE_SOURCE_DIR}/src/main.cpp)
@@ -108,6 +77,7 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/include)
 target_precompile_headers(${PROJECT_NAME} PRIVATE <volt/core/volt.h>)
 target_link_libraries(${PROJECT_NAME} PRIVATE
 	${PROJECT_NAME}_lib
+	structure-identification::structure-identification
 	coretoolkit::coretoolkit
 	TBB::tbb
 )

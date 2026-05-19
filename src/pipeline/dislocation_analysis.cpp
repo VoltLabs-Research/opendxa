@@ -30,6 +30,9 @@ DislocationAnalysis::DislocationAnalysis()
       _crystalPathSteps(4),
       _exportDefectMesh(true),
       _exportInterfaceMesh(false),
+      _exportDelaunayTessellation(false),
+      _exportStructureIdentification(false),
+      _exportCoherentCrystallineRegions(false),
       _exportDislocations(true),
       _exportCircuitInformation(true),
       _exportDislocationNetworkStats(true),
@@ -91,7 +94,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance(), _interfaceAlphaScale);
 
     elasticMap.releaseCaches();
-    tessellation.releaseMemory();
 
     spdlog::info("Burgers loops construction");
     BurgersLoopBuilder tracer(
@@ -146,8 +148,36 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 false
             );
         }
+
+        if(_exportDelaunayTessellation){
+            spdlog::info("Writing Delaunay tessellation data");
+            JsonUtils::writeJsonMsgpackToFile(
+                DxaSerialization::buildDelaunayTessellationJson(tessellation),
+                outputFile + "_delaunay_tessellation.msgpack",
+                false
+            );
+        }
+
+        if(_exportStructureIdentification){
+            spdlog::info("Writing structure identification data");
+            JsonUtils::writeJsonMsgpackToFile(
+                DxaSerialization::buildStructureIdentificationJson(frame, *structureAnalysis),
+                outputFile + "_atoms.msgpack",
+                false
+            );
+        }
+
+        if(_exportCoherentCrystallineRegions){
+            spdlog::info("Writing coherent crystalline region data");
+            JsonUtils::writeJsonMsgpackToFile(
+                DxaSerialization::buildCoherentCrystallineRegionsJson(frame, *structureAnalysis),
+                outputFile + "_coherent_crystalline_regions.msgpack",
+                false
+            );
+        }
     }
 
+    tessellation.releaseMemory();
     structureAnalysis.reset();
     positions.reset();
 }

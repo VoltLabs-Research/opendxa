@@ -3,8 +3,10 @@
 #include <nlohmann/json.hpp>
 
 #include <volt/helpers/dislocation_network.h>
+#include <volt/pipeline/delaunay_tessellation.h>
 #include <volt/pipeline/interface_mesh.h>
 #include <volt/analysis/structure_analysis.h>
+#include <volt/core/lammps_parser.h>
 
 namespace Volt::DxaSerialization{
 
@@ -34,6 +36,18 @@ json buildDefectMeshJson(
     const InterfaceMesh& interfaceMesh,
     const StructureAnalysis& structureAnalysis,
     bool includeTopologyInfo
+);
+
+json buildDelaunayTessellationJson(const DelaunayTessellation& tessellation);
+
+json buildStructureIdentificationJson(
+    const LammpsParser::Frame& frame,
+    const StructureAnalysis& structureAnalysis
+);
+
+json buildCoherentCrystallineRegionsJson(
+    const LammpsParser::Frame& frame,
+    const StructureAnalysis& structureAnalysis
 );
 
 }
