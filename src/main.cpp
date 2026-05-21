@@ -13,29 +13,29 @@ using namespace Volt::CLI;
 void showUsage(const std::string& name) {
     printUsageHeader(name, "Volt - Full Dislocation Analysis");
     std::cerr
-        << "  --clusters-table <path>           Path to *_clusters.table exported by CNA/PTM.\n"
-        << "  --clusters-transitions <path>     Path to *_cluster_transitions.table exported by CNA/PTM.\n"
-        << "  --reference-topology <name>       Topology name/alias from OpenDXA YAML definitions for the matrix phase.\n"
-        << "  --lattice-dir <path>              Directory containing OpenDXA lattice YAMLs.\n"
-        << "  --max-trial-circuit-size <int>    Maximum Burgers circuit size. [default: 14]\n"
-        << "  --circuit-stretchability <int>    Circuit stretchability factor. [default: 9]\n"
-        << "  --line-smoothing-level <float>    Line smoothing level. [default: 1]\n"
-        << "  --line-point-interval <float>     Point interval on dislocation lines. [default: 2.5]\n"
-        << "  --ghost-layer-scale <float>       Ghost-layer scale relative to max neighbor distance. [default: 3.5]\n"
-        << "  --interface-alpha-scale <float>   Interface alpha scale. [default: 5.0]\n"
-        << "  --inteface-alpha-scale <float>    Alias for --interface-alpha-scale.\n"
-        << "  --crystal-path-steps <int>        Maximum crystal path search depth. [default: 4]\n"
-        << "  --export-defect-mesh <bool>       Export defect mesh msgpack. [default: true]\n"
-        << "  --export-interface-mesh <bool>    Export interface mesh msgpack. [default: false]\n"
-        << "  --export-delaunay-tessellation <bool> Export Delaunay tessellation msgpack. [default: false]\n"
-        << "  --export-structure-identification <bool> Export atoms.msgpack grouped by structure id/name. [default: false]\n"
-        << "  --export-coherent-crystalline-regions <bool> Export atoms grouped by coherent cluster id. [default: false]\n"
-        << "  --export-dislocations <bool>      Export dislocations msgpack. [default: true]\n"
-        << "  --export-circuit-information <bool> Export circuit statistics in dislocations msgpack. [default: true]\n"
-        << "  --export-dislocation-network-stats <bool> Export network statistics in dislocations msgpack. [default: true]\n"
-        << "  --export-junctions <bool>         Export junction information in dislocations msgpack. [default: true]\n"
-        << "  --clip-pbc-segments <bool>        Clip dislocation segments against PBC when exporting. [default: true]\n"
-        << "  --cover-domain-with-finite-tets <bool> Cover the domain with helper finite tetrahedra. [default: false]\n";
+        << "  --clusters_table <path>           Path to *_clusters.table exported by CNA/PTM.\n"
+        << "  --clusters_transitions <path>     Path to *_cluster_transitions.table exported by CNA/PTM.\n"
+        << "  --reference_topology <name>       Topology name/alias from OpenDXA YAML definitions for the matrix phase.\n"
+        << "  --lattice_dir <path>              Directory containing OpenDXA lattice YAMLs.\n"
+        << "  --max_trial_circuit_size <int>    Maximum Burgers circuit size. [default: 14]\n"
+        << "  --circuit_stretchability <int>    Circuit stretchability factor. [default: 9]\n"
+        << "  --line_smoothing_level <float>    Line smoothing level. [default: 1]\n"
+        << "  --line_point_interval <float>     Point interval on dislocation lines. [default: 2.5]\n"
+        << "  --ghost_layer_scale <float>       Ghost-layer scale relative to max neighbor distance. [default: 3.5]\n"
+        << "  --interface_alpha_scale <float>   Interface alpha scale. [default: 5.0]\n"
+        << "  --inteface_alpha_scale <float>    Accepted alias for --interface_alpha_scale.\n"
+        << "  --crystal_path_steps <int>        Maximum crystal path search depth. [default: 4]\n"
+        << "  --export_defect_mesh <bool>       Export defect mesh msgpack. [default: true]\n"
+        << "  --export_interface_mesh <bool>    Export interface mesh msgpack. [default: false]\n"
+        << "  --export_delaunay_tessellation <bool> Export Delaunay tessellation msgpack. [default: false]\n"
+        << "  --export_structure_identification <bool> Export atoms.msgpack grouped by structure id/name. [default: false]\n"
+        << "  --export_coherent_crystalline_regions <bool> Export atoms grouped by coherent cluster id. [default: false]\n"
+        << "  --export_dislocations <bool>      Export dislocations msgpack. [default: true]\n"
+        << "  --export_circuit_information <bool> Export circuit statistics in dislocations msgpack. [default: true]\n"
+        << "  --export_dislocation_network_stats <bool> Export network statistics in dislocations msgpack. [default: true]\n"
+        << "  --export_junctions <bool>         Export junction information in dislocations msgpack. [default: true]\n"
+        << "  --clip_pbc_segments <bool>        Clip dislocation segments against PBC when exporting. [default: true]\n"
+        << "  --cover_domain_with_finite_tets <bool> Cover the domain with helper finite tetrahedra. [default: false]\n";
     printHelpOption();
 }
 
@@ -57,47 +57,47 @@ int main(int argc, char* argv[]) {
     spdlog::info("Output base: {}", outputBase);
     
     DislocationAnalysis analyzer;
-    const std::string latticeDirectory = getString(opts, "--lattice-dir", "");
+    const std::string latticeDirectory = getString(opts, "--lattice_dir", "");
     if(!latticeDirectory.empty()){
         setCrystalTopologySearchRoot(latticeDirectory);
         spdlog::info("Using lattice directory: {}", latticeDirectory);
     }
-    if(!hasOption(opts, "--reference-topology")){
-        spdlog::error("Missing required option --reference-topology");
+    if(!hasOption(opts, "--reference_topology")){
+        spdlog::error("Missing required option --reference_topology");
         return 1;
     }
-    const std::string topologyName = getString(opts, "--reference-topology");
+    const std::string topologyName = getString(opts, "--reference_topology");
     const CrystalTopologyEntry* topology = crystalTopologyByName(topologyName);
     if(!topology){
-        spdlog::error("Unknown value for --reference-topology: {}", topologyName);
+        spdlog::error("Unknown value for --reference_topology: {}", topologyName);
         return 1;
     }
 
     analyzer.setReferenceTopology(topology->name);
-    analyzer.setMaxTrialCircuitSize(getInt(opts, "--max-trial-circuit-size", 14));
-    analyzer.setCircuitStretchability(getInt(opts, "--circuit-stretchability", 9));
-    analyzer.setLineSmoothingLevel(getDouble(opts, "--line-smoothing-level", 1.0));
-    analyzer.setLinePointInterval(getDouble(opts, "--line-point-interval", 2.5));
-    analyzer.setGhostLayerScale(getDouble(opts, "--ghost-layer-scale", 3.5));
+    analyzer.setMaxTrialCircuitSize(getInt(opts, "--max_trial_circuit_size", 14));
+    analyzer.setCircuitStretchability(getInt(opts, "--circuit_stretchability", 9));
+    analyzer.setLineSmoothingLevel(getDouble(opts, "--line_smoothing_level", 1.0));
+    analyzer.setLinePointInterval(getDouble(opts, "--line_point_interval", 2.5));
+    analyzer.setGhostLayerScale(getDouble(opts, "--ghost_layer_scale", 3.5));
     analyzer.setInterfaceAlphaScale(getDouble(
         opts,
-        "--interface-alpha-scale",
-        getDouble(opts, "--inteface-alpha-scale", 5.0)
+        "--interface_alpha_scale",
+        getDouble(opts, "--inteface_alpha_scale", 5.0)
     ));
-    analyzer.setCrystalPathSteps(getInt(opts, "--crystal-path-steps", 4));
-    analyzer.setExportDefectMesh(getBool(opts, "--export-defect-mesh", true));
-    analyzer.setExportInterfaceMesh(getBool(opts, "--export-interface-mesh", false));
-    analyzer.setExportDelaunayTessellation(getBool(opts, "--export-delaunay-tessellation", false));
-    analyzer.setExportStructureIdentification(getBool(opts, "--export-structure-identification", false));
-    analyzer.setExportCoherentCrystallineRegions(getBool(opts, "--export-coherent-crystalline-regions", false));
-    analyzer.setExportDislocations(getBool(opts, "--export-dislocations", true));
-    analyzer.setExportCircuitInformation(getBool(opts, "--export-circuit-information", true));
-    analyzer.setExportDislocationNetworkStats(getBool(opts, "--export-dislocation-network-stats", true));
-    analyzer.setExportJunctions(getBool(opts, "--export-junctions", true));
-    analyzer.setClipPbcSegments(getBool(opts, "--clip-pbc-segments", true));
-    analyzer.setCoverDomainWithFiniteTets(getBool(opts, "--cover-domain-with-finite-tets", false));
-    analyzer.setClustersTablePath(getString(opts, "--clusters-table"));
-    analyzer.setClusterTransitionsPath(getString(opts, "--clusters-transitions"));
+    analyzer.setCrystalPathSteps(getInt(opts, "--crystal_path_steps", 4));
+    analyzer.setExportDefectMesh(getBool(opts, "--export_defect_mesh", true));
+    analyzer.setExportInterfaceMesh(getBool(opts, "--export_interface_mesh", false));
+    analyzer.setExportDelaunayTessellation(getBool(opts, "--export_delaunay_tessellation", false));
+    analyzer.setExportStructureIdentification(getBool(opts, "--export_structure_identification", false));
+    analyzer.setExportCoherentCrystallineRegions(getBool(opts, "--export_coherent_crystalline_regions", false));
+    analyzer.setExportDislocations(getBool(opts, "--export_dislocations", true));
+    analyzer.setExportCircuitInformation(getBool(opts, "--export_circuit_information", true));
+    analyzer.setExportDislocationNetworkStats(getBool(opts, "--export_dislocation_network_stats", true));
+    analyzer.setExportJunctions(getBool(opts, "--export_junctions", true));
+    analyzer.setClipPbcSegments(getBool(opts, "--clip_pbc_segments", true));
+    analyzer.setCoverDomainWithFiniteTets(getBool(opts, "--cover_domain_with_finite_tets", false));
+    analyzer.setClustersTablePath(getString(opts, "--clusters_table"));
+    analyzer.setClusterTransitionsPath(getString(opts, "--clusters_transitions"));
     
     spdlog::info("Starting dislocation analysis...");
     try{

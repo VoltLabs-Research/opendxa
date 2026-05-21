@@ -25,26 +25,26 @@ opendxa <annotated.dump> [output_base] [options]
 | --- | --- | --- | --- |
 | `<annotated.dump>` | Yes | Annotated dump exported by an upstream producer. | |
 | `[output_base]` | No | Output basename. If omitted, OpenDXA derives it from the input dump path. | derived from input |
-| `--clusters-table <path>` | Yes | Path to `*_clusters.table`. | |
-| `--clusters-transitions <path>` | Yes | Path to `*_cluster_transitions.table`. | |
-| `--reference-topology <name>` | Yes | Matrix-phase topology name resolved from OpenDXA lattice YAMLs. | |
-| `--lattice-dir <path>` | No | Directory containing OpenDXA lattice YAMLs. | compiled/package lattice directory |
-| `--max-trial-circuit-size <int>` | No | Maximum Burgers circuit size. | `14` |
-| `--circuit-stretchability <int>` | No | Circuit stretchability factor. | `9` |
-| `--line-smoothing-level <float>` | No | Smoothing applied to dislocation lines. | `1.0` |
-| `--line-point-interval <float>` | No | Point spacing along exported lines. | `2.5` |
-| `--ghost-layer-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance before building ghost atoms for the Delaunay tessellation. | `3.5` |
-| `--interface-alpha-scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance when running the interface alpha-shape filter. | `5.0` |
-| `--inteface-alpha-scale <float>` | No | Accepted alias for `--interface-alpha-scale`. | |
-| `--crystal-path-steps <int>` | No | Maximum crystal path depth used while assigning ideal edge vectors. | `4` |
-| `--export-defect-mesh <bool>` | No | Enable or disable writing `*_defect_mesh.msgpack`. | `true` |
-| `--export-interface-mesh <bool>` | No | Enable or disable writing `*_interface_mesh.msgpack`. | `false` |
-| `--export-dislocations <bool>` | No | Enable or disable writing `*_dislocations.msgpack`. | `true` |
-| `--export-circuit-information <bool>` | No | Include `circuit_information` inside the dislocations msgpack. | `true` |
-| `--export-dislocation-network-stats <bool>` | No | Include `network_statistics` inside the dislocations msgpack. | `true` |
-| `--export-junctions <bool>` | No | Include `junction_information` inside the dislocations msgpack. | `true` |
-| `--clip-pbc-segments <bool>` | No | Clip exported dislocation polylines at periodic boundaries. If disabled, OpenDXA exports the raw traced lines. | `true` |
-| `--cover-domain-with-finite-tets <bool>` | No | Add helper points so the Delaunay domain is fully covered by finite tetrahedra. | `false` |
+| `--clusters_table <path>` | Yes | Path to `*_clusters.table`. | |
+| `--clusters_transitions <path>` | Yes | Path to `*_cluster_transitions.table`. | |
+| `--reference_topology <name>` | Yes | Matrix-phase topology name resolved from OpenDXA lattice YAMLs. | |
+| `--lattice_dir <path>` | No | Directory containing OpenDXA lattice YAMLs. | compiled/package lattice directory |
+| `--max_trial_circuit_size <int>` | No | Maximum Burgers circuit size. | `14` |
+| `--circuit_stretchability <int>` | No | Circuit stretchability factor. | `9` |
+| `--line_smoothing_level <float>` | No | Smoothing applied to dislocation lines. | `1.0` |
+| `--line_point_interval <float>` | No | Point spacing along exported lines. | `2.5` |
+| `--ghost_layer_scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance before building ghost atoms for the Delaunay tessellation. | `3.5` |
+| `--interface_alpha_scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance when running the interface alpha-shape filter. | `5.0` |
+| `--inteface_alpha_scale <float>` | No | Accepted alias for `--interface_alpha_scale`. | |
+| `--crystal_path_steps <int>` | No | Maximum crystal path depth used while assigning ideal edge vectors. | `4` |
+| `--export_defect_mesh <bool>` | No | Enable or disable writing `*_defect_mesh.msgpack`. | `true` |
+| `--export_interface_mesh <bool>` | No | Enable or disable writing `*_interface_mesh.msgpack`. | `false` |
+| `--export_dislocations <bool>` | No | Enable or disable writing `*_dislocations.msgpack`. | `true` |
+| `--export_circuit_information <bool>` | No | Include `circuit_information` inside the dislocations msgpack. | `true` |
+| `--export_dislocation_network_stats <bool>` | No | Include `network_statistics` inside the dislocations msgpack. | `true` |
+| `--export_junctions <bool>` | No | Include `junction_information` inside the dislocations msgpack. | `true` |
+| `--clip_pbc_segments <bool>` | No | Clip exported dislocation polylines at periodic boundaries. If disabled, OpenDXA exports the raw traced lines. | `true` |
+| `--cover_domain_with_finite_tets <bool>` | No | Add helper points so the Delaunay domain is fully covered by finite tetrahedra. | `false` |
 | `--help` | No | Print CLI help. | |
 
 ## Overview
@@ -78,12 +78,12 @@ Each OpenDXA lattice YAML currently contains only:
 
 OpenDXA resolves reference lattices in this order:
 
-1. `--lattice-dir`, when provided
+1. `--lattice_dir`, when provided
 2. The compile-time source lattice directory
 3. `share/volt/lattices` relative to the executable/package
 
 This means you can test new OpenDXA lattice YAMLs at runtime without recompiling by
-passing `--lattice-dir /path/to/lattices`.
+passing `--lattice_dir /path/to/lattices`.
 
 ## Required Contract
 
@@ -136,13 +136,13 @@ Rules:
 
 - `cluster_id` must match the `cluster_id` written into the annotated dump
 - `topology_name` must match an OpenDXA lattice `name`
-- the matrix phase passed as `--reference-topology` must match the dominant matrix `topology_name`
+- the matrix phase passed as `--reference_topology` must match the dominant matrix `topology_name`
 
 Examples:
 
-- FCC matrix: `--reference-topology fcc`
-- BCC matrix: `--reference-topology bcc`
-- FCT matrix: `--reference-topology fct`
+- FCC matrix: `--reference_topology fcc`
+- BCC matrix: `--reference_topology bcc`
+- FCT matrix: `--reference_topology fct`
 
 ### `*_cluster_transitions.table`
 
@@ -203,10 +203,10 @@ It still exports the same reconstructed-state contract that OpenDXA expects.
 
 Supported CLI parameters:
 
-- `--lattice-dir <path>`
-- `--reference-lattice-dir <path>`
+- `--lattice_dir <path>`
+- `--reference_lattice_dir <path>`
 - `--patterns <csv>`
-- `--dissolveSmallClusters`
+- `--dissolve_small_clusters`
 
 #### Currently Supported PatternStructureMatching Lattices
 
@@ -238,7 +238,7 @@ To add a new lattice to PatternStructureMatching:
    - `coordinate_mode`
    - `basis`
 3. Run PatternStructureMatching with:
-   - `--lattice-dir /path/to/PatternStructureMatching/lattices`
+   - `--lattice_dir /path/to/PatternStructureMatching/lattices`
    - `--patterns <name>`
 
 Minimal example:
@@ -268,7 +268,7 @@ If the new PatternStructureMatching lattice should also be consumable by OpenDXA
    - `name`
    - `coordination_number`
    - `neighbor_vectors`
-3. Run OpenDXA with `--lattice-dir /path/to/OpenDXA/lattices`
+3. Run OpenDXA with `--lattice_dir /path/to/OpenDXA/lattices`
 4. Ensure the upstream `topology_name` matches the same `<name>`
 
 Minimal OpenDXA example:
@@ -292,4 +292,4 @@ No OpenDXA code changes are required as long as:
 
 - the producer emits a compatible reconstructed-state package
 - `topology_name` matches the YAML `name`
-- the matrix phase passed to `--reference-topology` exists in the OpenDXA lattice directory
+- the matrix phase passed to `--reference_topology` exists in the OpenDXA lattice directory
