@@ -66,7 +66,7 @@ struct BurgersCircuit{
 			}
 
 			edge = edge->nextCircuitEdge;
-            if(++safety_counter > edgeCount + 100) break; // Infinite loop protection
+            if(++safety_counter > edgeCount + 100) break; 
 		}while(edge != nullptr && edge != firstEdge);
 
         if(!firstEdge || !firstEdge->clusterTransition) return ClusterVector(b, nullptr);
