@@ -94,34 +94,39 @@ private:
 			}
 		});
 
-		// Commit remains sequential to preserve deterministic region assignment and indexing.
+		// Parallel region assignment
+		std::vector<int> regions(cells.size(), 0);
+		tbb::parallel_for(tbb::blocked_range<size_t>(0, cells.size(), 4096),
+			[&](const tbb::blocked_range<size_t>& r){
+			for(size_t i = r.begin(); i < r.end(); ++i){
+				if(isFilled[i])
+					regions[i] = determineCellRegion(cells[i]);
+			}
+		});
+
+		// Serial commit (cheap: only writes fields, no computation)
 		for(size_t i = 0; i < cells.size(); ++i){
 			auto cell = cells[i];
-			const int region = isFilled[i] ? determineCellRegion(cell) : 0;
-			_tessellation.setUserField(cell, region);
+			_tessellation.setUserField(cell, regions[i]);
 
 			if(!_tessellation.isGhostCell(cell)){
 				if(_spaceFillingRegion == -2){
-					_spaceFillingRegion = region;
-				}else if(_spaceFillingRegion != region){
+					_spaceFillingRegion = regions[i];
+				}else if(_spaceFillingRegion != regions[i]){
 					_spaceFillingRegion = -1;
 				}
 			}
+		}
 
-			if(region != 0 && !_tessellation.isGhostCell(cell)){
+		int cellIndex = 0;
+		for(size_t i = 0; i < cells.size(); ++i){
+			auto cell = cells[i];
+			if(regions[i] != 0 && !_tessellation.isGhostCell(cell)){
+				_tessellation.setCellIndex(cell, cellIndex++);
 				_numSolidCells++;
 			}else{
 				_tessellation.setCellIndex(cell, -1);
 			}
-		}
-		
-		int cellIndex = 0;
-		for(auto cell : cells){
-			if(_tessellation.getUserField(cell) != 0 && !_tessellation.isGhostCell(cell)){
-				_tessellation.setCellIndex(cell, cellIndex++);
-			}else{
-                _tessellation.setCellIndex(cell, -1);
-            }
 		}
 
 		if(_spaceFillingRegion == -2) _spaceFillingRegion = 0;
@@ -147,13 +152,21 @@ private:
 
 		// Phase 1: Collect active cells (parallel filter)
 		const size_t totalCells = _tessellation.numberOfTetrahedra();
+
+		std::vector<uint8_t> isActive(totalCells, 0);
+		tbb::parallel_for(tbb::blocked_range<size_t>(0, totalCells, 8192),
+			[&](const tbb::blocked_range<size_t>& r){
+			for(size_t cellIdx = r.begin(); cellIdx < r.end(); ++cellIdx){
+				if(_tessellation.getCellIndex(static_cast<DelaunayTessellation::CellHandle>(cellIdx)) != -1)
+					isActive[cellIdx] = 1;
+			}
+		});
+
 		std::vector<uint32_t> activeCellIndices;
 		activeCellIndices.reserve(totalCells / 8);
-
 		for(size_t cellIdx = 0; cellIdx < totalCells; ++cellIdx){
-			if(_tessellation.getCellIndex(static_cast<DelaunayTessellation::CellHandle>(cellIdx)) != -1){
+			if(isActive[cellIdx])
 				activeCellIndices.push_back(static_cast<uint32_t>(cellIdx));
-			}
 		}
 
 		// Phase 2: Find all interface facets (one big parallel pass)
@@ -233,27 +246,45 @@ private:
 
 	template<typename LinkManifoldsFunc>
 	bool linkHalfedges(LinkManifoldsFunc&& linkManifoldsFunc){
-		auto tet = _tetrahedraFaceList.cbegin();
-        for(DelaunayTessellation::CellHandle cell : _tessellation.cells()){
+		std::vector<std::pair<DelaunayTessellation::CellHandle, size_t>> activeCells;
+		activeCells.reserve(static_cast<size_t>(_numSolidCells));
+		size_t tetIdx = 0;
+		for(DelaunayTessellation::CellHandle cell : _tessellation.cells()){
 			if(_tessellation.getCellIndex(cell) == -1) continue;
+			activeCells.push_back({cell, tetIdx});
+			++tetIdx;
+		}
 
-			for(int f = 0; f < 4; f++){
-				auto* facet = (*tet)[f];
-				if(!facet) continue;
+		tbb::parallel_for(tbb::blocked_range<size_t>(0, activeCells.size(), 256),
+			[&](const tbb::blocked_range<size_t>& r){
+			for(size_t ci = r.begin(); ci < r.end(); ++ci){
+				auto [cell, ti] = activeCells[ci];
+				for(int f = 0; f < 4; f++){
+					auto* facet = _tetrahedraFaceList[ti][f];
+					if(!facet) continue;
 
-				auto* edge = facet->edges();
-				for(int e = 0; e < 3; ++e, edge = edge->nextFaceEdge()){
-					if(edge->oppositeEdge()) continue;
-					auto* oppFace = findAdjacentFace(cell, f, e);
-					if(oppFace){
-                        auto* oppEdge = oppFace->findEdge(edge->vertex2(), edge->vertex1());
-                        if(oppEdge) edge->linkToOppositeEdge(oppEdge);
-                    }
+					auto* edge = facet->edges();
+					for(int e = 0; e < 3; ++e, edge = edge->nextFaceEdge()){
+						if(edge->oppositeEdge()) continue;
+						auto* oppFace = findAdjacentFace(cell, f, e);
+						if(oppFace){
+							auto* oppEdge = oppFace->findEdge(edge->vertex2(), edge->vertex1());
+							if(oppEdge) edge->linkToOppositeEdge(oppEdge);
+						}
+					}
 				}
+			}
+		});
 
-				if constexpr(CreateTwoSidedMesh){
+		if constexpr(CreateTwoSidedMesh){
+			for(auto [cell, ti] : activeCells){
+				for(int f = 0; f < 4; f++){
+					auto* facet = _tetrahedraFaceList[ti][f];
+					if(!facet) continue;
+
 					auto oppFacet = _tessellation.mirrorFacet(cell, f);
 					auto* outerFacet = findCellFace(oppFacet);
+					if(!outerFacet) continue;
 
 					auto* edge1 = facet->edges();
 					for(int i = 0; i < 3; ++i, edge1 = edge1->nextFaceEdge()){
@@ -270,13 +301,13 @@ private:
 						for(int e = 0; e < 3; ++e, edge = edge->nextFaceEdge()){
 							if(edge->oppositeEdge()) continue;
 							auto* oppFace = findAdjacentFace(oppFacet.first, oppFacet.second, e);
+							if(!oppFace) continue;
 							auto* oppEdge = oppFace->findEdge(edge->vertex2(), edge->vertex1());
-							edge->linkToOppositeEdge(oppEdge);
+							if(oppEdge) edge->linkToOppositeEdge(oppEdge);
 						}
 					}
 				}
 			}
-			++tet;
 		}
 		return true;
 	}
