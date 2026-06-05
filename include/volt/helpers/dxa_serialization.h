@@ -19,37 +19,6 @@ struct DislocationsExportOptions{
     bool exportJunctions = true;
 };
 
-json buildDislocationsJson(
-    const DislocationNetwork* network,
-    const SimulationCell* simulationCell = nullptr,
-    const DislocationsExportOptions& options = {}
-);
-
-json buildMeshJson(
-    const InterfaceMesh& mesh,
-    const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
-    const InterfaceMesh* interfaceMeshForTopology
-);
-
-json buildDefectMeshJson(
-    const InterfaceMesh& interfaceMesh,
-    const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo
-);
-
-json buildDelaunayTessellationJson(const DelaunayTessellation& tessellation);
-
-json buildStructureIdentificationJson(
-    const LammpsParser::Frame& frame,
-    const StructureAnalysis& structureAnalysis
-);
-
-json buildCoherentCrystallineRegionsJson(
-    const LammpsParser::Frame& frame,
-    const StructureAnalysis& structureAnalysis
-);
-
 // Streaming export — writes directly to file without building DOM
 void streamDislocationsToFile(
     const std::string& filePath,
@@ -63,6 +32,17 @@ void streamDefectMeshToFile(
     const InterfaceMesh& interfaceMesh,
     const StructureAnalysis& structureAnalysis,
     bool includeTopologyInfo
+);
+
+void streamDelaunayTessellationToFile(
+    const std::string& filePath,
+    const DelaunayTessellation& tessellation
+);
+
+void streamCoherentCrystallineRegionsToFile(
+    const std::string& filePath,
+    const LammpsParser::Frame& frame,
+    const StructureAnalysis& structureAnalysis
 );
 
 }

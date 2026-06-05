@@ -7,8 +7,8 @@
 #include <volt/pipeline/delaunay_tessellation.h>
 #include <volt/pipeline/elastic_mapping.h>
 #include <volt/pipeline/interface_mesh.h>
-#include <volt/utilities/json_utils.h>
 #include <volt/helpers/dxa_serialization.h>
+#include <volt/analysis/structure_identification_export.h>
 
 #include <spdlog/spdlog.h>
 
@@ -121,10 +121,11 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     if(!outputFile.empty()){
         if(_exportDefectMesh){
             spdlog::info("Writing defect mesh data");
-            JsonUtils::writeJsonMsgpackToFile(
-                DxaSerialization::buildDefectMeshJson(interfaceMesh, interfaceMesh.structureAnalysis(), true),
+            DxaSerialization::streamDefectMeshToFile(
                 outputFile + "_defect_mesh.msgpack",
-                false
+                interfaceMesh,
+                interfaceMesh.structureAnalysis(),
+                true
             );
         }
 
@@ -136,51 +137,42 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 _exportDislocationNetworkStats,
                 _exportJunctions
             };
-            JsonUtils::writeJsonMsgpackToFile(
-                DxaSerialization::buildDislocationsJson(&network, &frame.simulationCell, exportOptions),
+            DxaSerialization::streamDislocationsToFile(
                 outputFile + "_dislocations.msgpack",
-                false
+                &network,
+                &frame.simulationCell,
+                exportOptions
             );
         }
 
         if(_exportInterfaceMesh){
             spdlog::info("Writing mesh data");
-            JsonUtils::writeJsonMsgpackToFile(
-                DxaSerialization::buildMeshJson(
-                    interfaceMesh,
-                    interfaceMesh.structureAnalysis(),
-                    true,
-                    &interfaceMesh
-                ),
+            DxaSerialization::streamDefectMeshToFile(
                 outputFile + "_interface_mesh.msgpack",
-                false
+                interfaceMesh,
+                interfaceMesh.structureAnalysis(),
+                true
             );
         }
 
         if(_exportDelaunayTessellation){
             spdlog::info("Writing Delaunay tessellation data");
-            JsonUtils::writeJsonMsgpackToFile(
-                DxaSerialization::buildDelaunayTessellationJson(tessellation),
-                outputFile + "_delaunay_tessellation.msgpack",
-                false
+            DxaSerialization::streamDelaunayTessellationToFile(
+                outputFile + "_delaunay_tessellation.msgpack", tessellation
             );
         }
 
         if(_exportStructureIdentification){
             spdlog::info("Writing structure identification data");
-            JsonUtils::writeJsonMsgpackToFile(
-                DxaSerialization::buildStructureIdentificationJson(frame, *structureAnalysis),
-                outputFile + "_atoms.msgpack",
-                false
+            StructureIdentificationExport::streamStructureIdentificationToFile(
+                outputFile + "_atoms.msgpack", frame, *structureAnalysis
             );
         }
 
         if(_exportCoherentCrystallineRegions){
             spdlog::info("Writing coherent crystalline region data");
-            JsonUtils::writeJsonMsgpackToFile(
-                DxaSerialization::buildCoherentCrystallineRegionsJson(frame, *structureAnalysis),
-                outputFile + "_coherent_crystalline_regions.msgpack",
-                false
+            DxaSerialization::streamCoherentCrystallineRegionsToFile(
+                outputFile + "_coherent_crystalline_regions.msgpack", frame, *structureAnalysis
             );
         }
     }
