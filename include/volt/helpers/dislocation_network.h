@@ -188,6 +188,7 @@ private:
 	MemoryPool<DislocationNode> _nodePool;
 	std::vector<DislocationSegment*> _segments;
 	MemoryPool<DislocationSegment> _segmentPool;
+	tbb::spin_mutex _segmentsMutex;
 };
 
 }

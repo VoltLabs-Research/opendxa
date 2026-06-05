@@ -15,6 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#include <chrono>
 
 namespace Volt{
 
@@ -42,6 +43,15 @@ DislocationAnalysis::DislocationAnalysis()
 
 void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::string& outputFile){
     spdlog::info("Processing frame {} with {} atoms", frame.timestep, frame.natoms);
+    auto tTotal = std::chrono::high_resolution_clock::now();
+    auto tStep = tTotal;
+
+    auto elapsed = [&](){
+        auto now = std::chrono::high_resolution_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - tStep).count();
+        tStep = now;
+        return ms;
+    };
 
     FrameAdapter::PreparedAnalysisInput prepared;
     std::string frameError;
@@ -54,10 +64,8 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     }
 
     std::shared_ptr<ParticleProperty> positions = std::move(prepared.positions);
-    
-    spdlog::info("Trying structural identification context reconstruction");
-    ReconstructedStructureContext context(positions.get(), frame.simulationCell);
 
+    ReconstructedStructureContext context(positions.get(), frame.simulationCell);
     auto structureAnalysis = std::make_unique<StructureAnalysis>(context);
     std::string reconstructionError;
     if(!ReconstructedStructureLoader::load(
@@ -69,8 +77,8 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     )){
         throw std::runtime_error(reconstructionError);
     }
+    spdlog::info("[{:>6}ms] Structure reconstruction", elapsed());
 
-    spdlog::info("Delaunay tessellation");
     DelaunayTessellation tessellation;
     double ghostLayerSize = _ghostLayerScale * structureAnalysis->maximumNeighborDistance();
     tessellation.generateTessellation(
@@ -81,34 +89,34 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         _coverDomainWithFiniteTets,
         nullptr
     );
+    spdlog::info("[{:>6}ms] Delaunay tessellation", elapsed());
 
-    spdlog::info("Elastic mapping");
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
     elasticMap.generateTessellationEdges();
     elasticMap.assignVerticesToClusters();
     elasticMap.assignIdealVectorsToEdges(false, _crystalPathSteps);
     elasticMap.shrinkVertexStorage();
+    spdlog::info("[{:>6}ms] Elastic mapping", elapsed());
 
-    spdlog::info("Creating interface mesh");
     InterfaceMesh interfaceMesh(elasticMap);
     interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance(), _interfaceAlphaScale);
-
     elasticMap.releaseCaches();
+    spdlog::info("[{:>6}ms] Interface mesh", elapsed());
 
-    spdlog::info("Burgers loops construction");
     BurgersLoopBuilder tracer(
         interfaceMesh,
         &structureAnalysis->clusterGraph(),
         static_cast<int>(_maxTrialCircuitSize),
         static_cast<int>(_circuitStretchability)
     );
-
     tracer.traceDislocationSegments();
     tracer.finishDislocationSegments(_referenceTopologyName);
+    spdlog::info("[{:>6}ms] Burgers loop tracing", elapsed());
 
     DislocationNetwork& network = tracer.network();
     spdlog::info("Found {} dislocation segments", network.segments().size());
     network.smoothDislocationLines(_lineSmoothingLevel, _linePointInterval);
+    spdlog::info("[{:>6}ms] Line smoothing", elapsed());
 
     if(!outputFile.empty()){
         if(_exportDefectMesh){
@@ -176,6 +184,12 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             );
         }
     }
+
+    spdlog::info("[{:>6}ms] Export", elapsed());
+
+    auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now() - tTotal).count();
+    spdlog::info("[{:>6}ms] TOTAL", totalMs);
 
     tessellation.releaseMemory();
     structureAnalysis.reset();
