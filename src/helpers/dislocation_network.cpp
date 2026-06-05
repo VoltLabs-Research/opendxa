@@ -45,6 +45,7 @@ DislocationNetwork::DislocationNetwork(const DislocationNetwork& other): _cluste
 // Allocates a new dislocation segment with the given Burgers vector, creates
 // its two end nodes and assigns a unique incremental segment ID.
 DislocationSegment* DislocationNetwork::createSegment(const ClusterVector& burgersVector){
+	tbb::spin_mutex::scoped_lock lock(_segmentsMutex);
 	DislocationNode *forwardNode = _nodePool.construct();
 	DislocationNode *backwardNode = _nodePool.construct();
 

@@ -7,12 +7,24 @@
 #include <boost/random/uniform_int_distribution.hpp>
 #include <boost/random/mersenne_twister.hpp>
 #include <boost/random/uniform_int.hpp>
+#include <tbb/spin_mutex.h>
 #include <string_view>
+#include <atomic>
 
 namespace Volt{
 
+struct BurgersLoopSearchNode{
+	HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>::Vertex* node;
+	Point3 coord;
+	Matrix3 tm;
+	int depth;
+	HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>::Edge* viaEdge;
+};
+
 class BurgersLoopBuilder{
 public:
+	using SearchNode = BurgersLoopSearchNode;
+
 	BurgersLoopBuilder(InterfaceMesh& mesh, ClusterGraph* clusterGraph, int maxTrialCircuitSize, int maxCircuitElongation) :
 		_mesh(mesh),
 		_clusterGraph(clusterGraph),
@@ -61,7 +73,7 @@ private:
 	void createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength);
 
 	bool findPrimarySegments(int maxBurgersCircuitSize);
-	bool createBurgersCircuit(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize);
+	bool createBurgersCircuitOriginal(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize);
 	bool intersectsOtherCircuits(BurgersCircuit* circuit);
 	bool tryRemoveTwoCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2);
 	bool tryRemoveThreeCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2, bool isPrimarySegment);
@@ -81,9 +93,10 @@ private:
 
 	InterfaceMesh& _mesh;
 	std::shared_ptr<DislocationNetwork> _network;
-	ClusterGraph* _clusterGraph; 
+	ClusterGraph* _clusterGraph;
 	tbb::spin_mutex _circuit_pool_mutex;
-	
+	tbb::spin_mutex _segmentMutex;
+
 	int _maxBurgersCircuitSize;
 	int _maxExtendedBurgersCircuitSize;
 
@@ -91,7 +104,7 @@ private:
 	boost::random::mt19937 _rng;
 	std::vector<DislocationNode*> _danglingNodes;
 	BurgersCircuit* _unusedCircuit;
-	mutable size_t _edgeStartIndex;  
+	mutable std::atomic<size_t> _edgeStartIndex{0};
 
 };
 

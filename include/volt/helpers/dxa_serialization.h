@@ -50,4 +50,19 @@ json buildCoherentCrystallineRegionsJson(
     const StructureAnalysis& structureAnalysis
 );
 
+// Streaming export — writes directly to file without building DOM
+void streamDislocationsToFile(
+    const std::string& filePath,
+    const DislocationNetwork* network,
+    const SimulationCell* simulationCell = nullptr,
+    const DislocationsExportOptions& options = {}
+);
+
+void streamDefectMeshToFile(
+    const std::string& filePath,
+    const InterfaceMesh& interfaceMesh,
+    const StructureAnalysis& structureAnalysis,
+    bool includeTopologyInfo
+);
+
 }

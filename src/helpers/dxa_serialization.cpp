@@ -799,14 +799,295 @@ int countJunctions(const DislocationNetwork* network){
 int countDanglingSegments(const DislocationNetwork* network){
     int dangling = 0;
     const auto& segments = network->segments();
-    
+
     for(const auto* segment : segments){
         if(segment && (segment->forwardNode().isDangling() || segment->backwardNode().isDangling())){
             dangling++;
         }
     }
-    
+
     return dangling;
+}
+
+// ============ STREAMING EXPORT ============
+
+void streamDislocationsToFile(
+    const std::string& filePath,
+    const DislocationNetwork* network,
+    const SimulationCell* simulationCell,
+    const DislocationsExportOptions& options
+){
+    std::ofstream of(filePath, std::ios::binary);
+    MsgpackWriter w(of);
+
+    const auto& segments = network->segments();
+    std::vector<const DislocationSegment*> validSegments;
+    validSegments.reserve(segments.size());
+    for(const auto* seg : segments){
+        if(seg && !seg->isDegenerate()) validSegments.push_back(seg);
+    }
+
+    // Pre-compute all chunks to know counts for headers
+    struct Chunk{
+        std::vector<Point3> points;
+        double length;
+        Vector3 burgersLocal;
+        Vector3 burgersGlobal;
+        double magnitude;
+    };
+    std::vector<Chunk> chunks;
+    chunks.reserve(validSegments.size() * 2);
+
+    double totalLength = 0;
+    int totalPoints = 0;
+    double maxLength = 0, minLength = std::numeric_limits<double>::max();
+    std::map<std::string, std::pair<int, double>> burgersSummary;
+
+    for(const auto* segment : validSegments){
+        auto emitChunk = [&](const std::vector<Point3>& pts){
+            double len = 0;
+            for(size_t i = 1; i < pts.size(); ++i)
+                len += (pts[i] - pts[i-1]).length();
+
+            Chunk c;
+            c.points = pts;
+            c.length = len;
+            c.burgersLocal = segment->burgersVector.localVec();
+            c.burgersGlobal = getGlobalBurgersVector(segment->burgersVector);
+            c.magnitude = c.burgersLocal.length();
+            chunks.push_back(std::move(c));
+
+            totalLength += len;
+            totalPoints += pts.size();
+            maxLength = std::max(maxLength, len);
+            minLength = std::min(minLength, len);
+            auto& s = burgersSummary[burgersVectorLabel(c.burgersLocal)];
+            s.first++; s.second += len;
+        };
+
+        if(simulationCell && options.clipPbcSegments){
+            std::vector<Point3> currentChunk;
+            clipDislocationLine(segment->line, *simulationCell,
+                [&](const Point3& p1, const Point3& p2, bool isInitial){
+                    if(isInitial && !currentChunk.empty()){
+                        emitChunk(currentChunk);
+                        currentChunk.clear();
+                    }
+                    if(currentChunk.empty()) currentChunk.push_back(p1);
+                    currentChunk.push_back(p2);
+                });
+            if(!currentChunk.empty()) emitChunk(currentChunk);
+        }else{
+            if(!segment->line.empty())
+                emitChunk(std::vector<Point3>(segment->line.begin(), segment->line.end()));
+        }
+    }
+    if(chunks.empty()) minLength = 0;
+
+    // Write msgpack structure directly
+    // Root: map with 3 keys: "export", "main_listing", "sub_listings"
+    w.write_map_header(3);
+
+    // "export"
+    w.write_key("export");
+    w.write_map_header(2);
+    {
+        // "DislocationExporter"
+        w.write_key("DislocationExporter");
+        w.write_map_header(1);
+        w.write_key("segments");
+        w.write_array_header(static_cast<uint32_t>(chunks.size()));
+        for(size_t i = 0; i < chunks.size(); ++i){
+            const auto& c = chunks[i];
+            w.write_map_header(8);
+            w.write_key("segment_id"); w.write_int(static_cast<int64_t>(i));
+            w.write_key("points");
+            w.write_array_header(static_cast<uint32_t>(c.points.size()));
+            for(const auto& p : c.points){
+                w.write_array_header(3);
+                w.write_double(p.x()); w.write_double(p.y()); w.write_double(p.z());
+            }
+            w.write_key("length"); w.write_double(c.length);
+            w.write_key("num_points"); w.write_int(static_cast<int64_t>(c.points.size()));
+            w.write_key("burgers_vector");
+            w.write_array_header(3);
+            w.write_double(c.burgersLocal.x()); w.write_double(c.burgersLocal.y()); w.write_double(c.burgersLocal.z());
+            w.write_key("burgers_vector_local");
+            w.write_array_header(3);
+            w.write_double(c.burgersLocal.x()); w.write_double(c.burgersLocal.y()); w.write_double(c.burgersLocal.z());
+            w.write_key("burgers_vector_global");
+            w.write_array_header(3);
+            w.write_double(c.burgersGlobal.x()); w.write_double(c.burgersGlobal.y()); w.write_double(c.burgersGlobal.z());
+            w.write_key("magnitude"); w.write_double(c.magnitude);
+        }
+
+        // "ChartExporter"
+        w.write_key("ChartExporter");
+        w.write_map_header(2);
+        w.write_key("burgers_counts");
+        w.write_map_header(2);
+        w.write_key("burgers_vector");
+        w.write_array_header(static_cast<uint32_t>(burgersSummary.size()));
+        for(const auto& [label, _] : burgersSummary) w.write_str(label);
+        w.write_key("segment_count");
+        w.write_array_header(static_cast<uint32_t>(burgersSummary.size()));
+        for(const auto& [_, s] : burgersSummary) w.write_int(s.first);
+        w.write_key("burgers_lengths");
+        w.write_map_header(2);
+        w.write_key("burgers_vector");
+        w.write_array_header(static_cast<uint32_t>(burgersSummary.size()));
+        for(const auto& [label, _] : burgersSummary) w.write_str(label);
+        w.write_key("total_length");
+        w.write_array_header(static_cast<uint32_t>(burgersSummary.size()));
+        for(const auto& [_, s] : burgersSummary) w.write_double(s.second);
+    }
+
+    // "main_listing"
+    w.write_key("main_listing");
+    w.write_map_header(6);
+    w.write_key("dislocations"); w.write_int(static_cast<int64_t>(chunks.size()));
+    w.write_key("total_points"); w.write_int(static_cast<int64_t>(totalPoints));
+    w.write_key("average_segment_length"); w.write_double(chunks.empty() ? 0.0 : totalLength / chunks.size());
+    w.write_key("max_segment_length"); w.write_double(maxLength);
+    w.write_key("min_segment_length"); w.write_double(minLength);
+    w.write_key("total_length"); w.write_double(totalLength);
+
+    // "sub_listings" - empty for streaming (data is in export)
+    w.write_key("sub_listings");
+    w.write_nil();
+
+    of.flush();
+}
+
+void streamDefectMeshToFile(
+    const std::string& filePath,
+    const InterfaceMesh& interfaceMesh,
+    const StructureAnalysis& structureAnalysis,
+    bool includeTopologyInfo
+){
+    std::ofstream of(filePath, std::ios::binary);
+    MsgpackWriter w(of);
+
+    const auto& originalVertices = interfaceMesh.vertices();
+    const auto& originalFaces = interfaceMesh.faces();
+    const auto& cell = structureAnalysis.context().simCell;
+
+    // Pre-compute export data (positions + face indices with PBC unwrapping)
+    std::vector<Point3> exportPoints;
+    exportPoints.reserve(originalVertices.size());
+    std::vector<int> originalToExportMap(originalVertices.size());
+    for(size_t i = 0; i < originalVertices.size(); ++i){
+        exportPoints.push_back(originalVertices[i]->pos());
+        originalToExportMap[i] = static_cast<int>(i);
+    }
+
+    std::vector<std::array<int, 3>> exportFaces;
+    exportFaces.reserve(originalFaces.size());
+    for(const auto* face : originalFaces){
+        if(!face || !face->edges()) continue;
+        std::array<int, 3> faceVerts{};
+        std::array<Point3, 3> facePos{};
+        auto* edge = face->edges();
+        for(int i = 0; i < 3; ++i, edge = edge->nextFaceEdge()){
+            faceVerts[i] = edge->vertex1()->index();
+            facePos[i] = edge->vertex1()->pos();
+        }
+
+        cell.unwrapPositions(facePos.data(), 3);
+
+        std::array<int, 3> newFaceVerts{};
+        for(int i = 0; i < 3; ++i){
+            const Point3& orig = originalVertices[faceVerts[i]]->pos();
+            if(!orig.equals(facePos[i], 1e-6)){
+                newFaceVerts[i] = static_cast<int>(exportPoints.size());
+                exportPoints.push_back(facePos[i]);
+            }else{
+                newFaceVerts[i] = originalToExportMap[faceVerts[i]];
+            }
+        }
+        exportFaces.push_back(newFaceVerts);
+    }
+
+    // Write msgpack
+    int numKeys = includeTopologyInfo ? 4 : 3;
+    w.write_map_header(numKeys);
+
+    // "main_listing"
+    w.write_key("main_listing");
+    w.write_map_header(2);
+    w.write_key("total_nodes"); w.write_int(static_cast<int64_t>(exportPoints.size()));
+    w.write_key("total_facets"); w.write_int(static_cast<int64_t>(exportFaces.size()));
+
+    // "sub_listings"
+    w.write_key("sub_listings");
+    w.write_map_header(2);
+    w.write_key("points");
+    w.write_array_header(static_cast<uint32_t>(exportPoints.size()));
+    for(size_t i = 0; i < exportPoints.size(); ++i){
+        w.write_map_header(2);
+        w.write_key("index"); w.write_int(static_cast<int64_t>(i));
+        w.write_key("position");
+        w.write_array_header(3);
+        w.write_double(exportPoints[i].x());
+        w.write_double(exportPoints[i].y());
+        w.write_double(exportPoints[i].z());
+    }
+    w.write_key("facets");
+    w.write_array_header(static_cast<uint32_t>(exportFaces.size()));
+    for(const auto& f : exportFaces){
+        w.write_map_header(1);
+        w.write_key("vertices");
+        w.write_array_header(3);
+        w.write_int(f[0]); w.write_int(f[1]); w.write_int(f[2]);
+    }
+
+    // "export"
+    w.write_key("export");
+    w.write_map_header(1);
+    w.write_key("MeshExporter");
+    w.write_map_header(2);
+    w.write_key("vertices");
+    w.write_array_header(static_cast<uint32_t>(exportPoints.size()));
+    for(size_t i = 0; i < exportPoints.size(); ++i){
+        w.write_map_header(2);
+        w.write_key("index"); w.write_int(static_cast<int64_t>(i));
+        w.write_key("position");
+        w.write_array_header(3);
+        w.write_double(exportPoints[i].x());
+        w.write_double(exportPoints[i].y());
+        w.write_double(exportPoints[i].z());
+    }
+    w.write_key("facets");
+    w.write_array_header(static_cast<uint32_t>(exportFaces.size()));
+    for(const auto& f : exportFaces){
+        w.write_map_header(1);
+        w.write_key("vertices");
+        w.write_array_header(3);
+        w.write_int(f[0]); w.write_int(f[1]); w.write_int(f[2]);
+    }
+
+    if(includeTopologyInfo){
+        w.write_key("topology");
+        w.write_map_header(3);
+        std::unordered_set<uint64_t> edgeSet;
+        edgeSet.reserve(originalFaces.size() * 3);
+        for(const auto* face : originalFaces){
+            if(!face || !face->edges()) continue;
+            auto* edge = face->edges();
+            do{
+                int v1 = edge->vertex1()->index(), v2 = edge->vertex2()->index();
+                if(v1 > v2) std::swap(v1, v2);
+                edgeSet.insert((static_cast<uint64_t>(static_cast<uint32_t>(v1)) << 32) | static_cast<uint32_t>(v2));
+                edge = edge->nextFaceEdge();
+            }while(edge != face->edges());
+        }
+        w.write_key("euler_characteristic");
+        w.write_int(static_cast<int64_t>(originalVertices.size()) - static_cast<int64_t>(edgeSet.size()) + static_cast<int64_t>(originalFaces.size()));
+        w.write_key("is_completely_good"); w.write_bool(interfaceMesh.isCompletelyGood());
+        w.write_key("is_completely_bad"); w.write_bool(interfaceMesh.isCompletelyBad());
+    }
+
+    of.flush();
 }
 
 }
