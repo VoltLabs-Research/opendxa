@@ -7,19 +7,6 @@ using namespace Volt::Plugin;
 using S = DislocationAnalysis;
 
 static const std::vector<OptionBinding<S>> bindings = {
-    opt<S>({"--lattice_dir", "path", "Directory containing lattice topology YAMLs", ""},
-        [](S&, const OptsMap& opts) {
-            const auto dir = CLI::getString(opts, "--lattice_dir", "");
-            if (!dir.empty()) setCrystalTopologySearchRoot(dir);
-        }),
-    opt<S>({"--reference_topology", "string", "Reference topology name [required]", ""},
-        [](S& s, const OptsMap& opts) {
-            const auto name = CLI::getString(opts, "--reference_topology", "");
-            if (!name.empty()) {
-                const auto* topo = crystalTopologyByName(name);
-                if (topo) s.setReferenceTopology(topo->name);
-            }
-        }),
     opt("--clusters_table", "Clusters table path", "", &S::setClustersTablePath),
     opt("--clusters_transitions", "Transitions path", "", &S::setClusterTransitionsPath),
     opt("--max_trial_circuit_size", "Max trial circuit size", 14.0, &S::setMaxTrialCircuitSize),
@@ -42,17 +29,27 @@ static const std::vector<OptionBinding<S>> bindings = {
     opt("--cover_domain_with_finite_tets", "Cover domain with finite tets", false, &S::setCoverDomainWithFiniteTets),
 };
 
-VOLT_PLUGIN_MAIN(
-    (PluginDescriptor{"volt-dxa", "Full Dislocation Analysis", optionsMeta(bindings)}),
+static PluginDescriptor buildDescriptor() {
+    auto meta = optionsMeta(bindings);
+    meta.insert(meta.begin(), {"--lattice_dir", "path", "Directory containing lattice topology YAMLs", ""});
+    meta.insert(meta.begin() + 1, {"--reference_topology", "string", "Reference topology name [required]", ""});
+    return {"volt-dxa", "Full Dislocation Analysis", std::move(meta)};
+}
+
+VOLT_PLUGIN_MAIN(buildDescriptor(),
     [](const OptsMap& opts, const LammpsParser::Frame& frame,
        const LammpsParser::Frame*, const std::string& outputBase) -> json {
     if (auto err = requireOptions(opts, {"--reference_topology"})) return *err;
+
+    const auto latticeDir = CLI::getString(opts, "--lattice_dir", "");
+    if (!latticeDir.empty()) setCrystalTopologySearchRoot(latticeDir);
 
     const auto* topo = crystalTopologyByName(CLI::getString(opts, "--reference_topology"));
     if (!topo)
         return AnalysisResult::failure("Unknown --reference_topology");
 
     S analyzer;
+    analyzer.setReferenceTopology(topo->name);
     applyAll(analyzer, bindings, opts);
 
     try { analyzer.compute(frame, outputBase); }
