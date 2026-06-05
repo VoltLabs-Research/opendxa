@@ -16,6 +16,7 @@
 #include <volt/utilities/json_utils.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
+#include <fstream>
 
 namespace Volt::DxaSerialization {
 
@@ -194,452 +195,181 @@ void clipDislocationLine(
     }
 }
 
-json buildDislocationsJson(
-    const DislocationNetwork* network, 
-    const SimulationCell* simulationCell,
-    const DislocationsExportOptions& options
+void streamDelaunayTessellationToFile(
+    const std::string& filePath,
+    const DelaunayTessellation& tessellation
 ){
-    json dislocations;
-    const auto& segments = network->segments();
-    std::vector<const DislocationSegment*> validSegments;
-    validSegments.reserve(segments.size());
-    for(const auto* segment : segments){
-        if(segment && !segment->isDegenerate()){
-            validSegments.push_back(segment);
-        }
-    }
-
-    json dataArray = json::array();
-    double totalLength = 0.0;
-    int totalPoints = 0;
-    double maxLength = 0.0;
-    double minLength = std::numeric_limits<double>::max();
-    int globalChunkId = 0;
-    std::map<std::string, std::pair<int, double>> burgersSummary;
-
-    auto saveChunk = [&](const std::vector<Point3>& chunk, const DislocationSegment* originalSegment){
-        json segmentJson;
-        json points = json::array();
-
-        segmentJson["segment_id"] = globalChunkId++;
-        double chunkLength = 0.0;
-        for(size_t pointIdx = 0; pointIdx < chunk.size(); ++pointIdx){
-            points.push_back({ chunk[pointIdx].x(), chunk[pointIdx].y(), chunk[pointIdx].z() });
-            if(pointIdx > 0){
-			chunkLength += (chunk[pointIdx] - chunk[pointIdx - 1]).length();
-            }
-        }
-
-        segmentJson["points"] = points;
-        segmentJson["length"] = chunkLength;
-        segmentJson["num_points"] = chunk.size();
-
-        const Vector3 burgersLocal = originalSegment->burgersVector.localVec();
-        const Vector3 burgersGlobal = getGlobalBurgersVector(originalSegment->burgersVector);
-        segmentJson["burgers_vector"] = { burgersLocal.x(), burgersLocal.y(), burgersLocal.z() };
-        segmentJson["burgers_vector_local"] = { burgersLocal.x(), burgersLocal.y(), burgersLocal.z() };
-        segmentJson["burgers_vector_global"] = { burgersGlobal.x(), burgersGlobal.y(), burgersGlobal.z() };
-        segmentJson["magnitude"] = burgersLocal.length();
-
-        dataArray.push_back(segmentJson);
-
-        totalLength += chunkLength;
-        totalPoints += chunk.size();
-        maxLength = std::max(maxLength, chunkLength);
-        minLength = std::min(minLength, chunkLength);
-        auto& summary = burgersSummary[burgersVectorLabel(burgersLocal)];
-        summary.first += 1;
-        summary.second += chunkLength;
-    };
-
-    for(size_t segmentId = 0; segmentId < validSegments.size(); ++segmentId){
-        const auto* segment = validSegments[segmentId];
-        if(simulationCell && options.clipPbcSegments){
-            std::vector<Point3> currentChunk;
-            clipDislocationLine(segment->line, *simulationCell, 
-                [&](const Point3& p1, const Point3& p2, bool isInitialSegment){
-                    if(isInitialSegment && !currentChunk.empty()){
-                        saveChunk(currentChunk, segment);
-                        currentChunk.clear();
-                    }
-
-                    if(currentChunk.empty()){
-                        currentChunk.push_back(p1);
-                    }
-
-                    currentChunk.push_back(p2);
-            });
-
-            if(!currentChunk.empty()){
-                saveChunk(currentChunk, segment);
-            }
-        }else{
-            std::vector<Point3> rawChunk(segment->line.begin(), segment->line.end());
-            if(!rawChunk.empty()){
-                saveChunk(rawChunk, segment);
-            }
-        }
-    }
-
-    if(dataArray.empty()){
-        minLength = 0.0;
-    }
-
-    dislocations["main_listing"] = {
-        { "dislocations", static_cast<int>(dataArray.size()) },
-        { "total_points", totalPoints },
-        { "average_segment_length", dataArray.empty() ? 0.0 : totalLength / dataArray.size() },
-        { "max_segment_length", maxLength },
-        { "min_segment_length", minLength },
-        { "total_length", totalLength }
-    };
-    dislocations["sub_listings"] = { { "dislocation_segments", dataArray } };
-    dislocations["export"]["DislocationExporter"]["segments"] = dataArray;
-
-    json burgersLabels = json::array();
-    json burgersCounts = json::array();
-    json burgersLengths = json::array();
-    for(const auto& [label, summary] : burgersSummary){
-        burgersLabels.push_back(label);
-        burgersCounts.push_back(summary.first);
-        burgersLengths.push_back(summary.second);
-    }
-    dislocations["export"]["ChartExporter"]["burgers_counts"] = {
-        {"burgers_vector", burgersLabels},
-        {"segment_count", burgersCounts}
-    };
-    dislocations["export"]["ChartExporter"]["burgers_lengths"] = {
-        {"burgers_vector", burgersLabels},
-        {"total_length", burgersLengths}
-    };
-
-    if(options.exportJunctions){
-        dislocations["sub_listings"]["junction_information"] = getJunctionInformation(network);
-    }
-    if(options.exportCircuitInformation){
-        dislocations["sub_listings"]["circuit_information"] = getCircuitInformation(network);
-    }
-    if(options.exportDislocationNetworkStats && simulationCell){
-        dislocations["sub_listings"]["network_statistics"] = getNetworkStatistics(network, simulationCell->volume3D());
-    }
-
-    return dislocations;
-}
-
-
-json buildMeshJson(
-    const InterfaceMesh& mesh,
-    const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
-    const InterfaceMesh* interfaceMeshForTopology
-){
-    json meshData;
-    const auto& originalVertices = mesh.vertices(); 
-    const auto& originalFaces = mesh.faces();
-    const auto& cell = structureAnalysis.context().simCell;
-
-    std::vector<Point3> exportPoints;
-    exportPoints.reserve(originalVertices.size());
-    std::vector<int> originalToExportVertexMap(originalVertices.size());
-    for(size_t i = 0; i < originalVertices.size(); ++i){
-        exportPoints.push_back(originalVertices[i]->pos());
-        originalToExportVertexMap[i] = i;
-    }
-
-    std::vector<std::vector<int>> exportFaces;
-    exportFaces.reserve(originalFaces.size());
-    for(const auto* face : originalFaces){
-        if (!face || !face->edges()) continue;
-        std::vector<int> faceVertexIndices;
-        std::vector<Point3> faceVertexPositions;
-        auto* startEdge = face->edges();
-        auto* currentEdge = startEdge;
-        do{
-            faceVertexIndices.push_back(currentEdge->vertex1()->index());
-            faceVertexPositions.push_back(currentEdge->vertex1()->pos());
-            currentEdge = currentEdge->nextFaceEdge();
-        }while(currentEdge != startEdge);
-
-        cell.unwrapPositions(faceVertexPositions.data(), faceVertexPositions.size());
-
-        std::vector<int> newFaceIndices;
-        for(size_t i = 0; i < faceVertexIndices.size(); ++i){
-            int originalIndex = faceVertexIndices[i];
-            const Point3& originalPos = originalVertices[originalIndex]->pos();
-            const Point3& unwrappedPos = faceVertexPositions[i];
-			if(!originalPos.equals(unwrappedPos, 1e-6)){
-                newFaceIndices.push_back(exportPoints.size());
-                exportPoints.push_back(unwrappedPos);
-            }else{
-                newFaceIndices.push_back(originalToExportVertexMap[originalIndex]);
-            }
-        }
-        exportFaces.push_back(newFaceIndices);
-    }
-    
-    meshData["main_listing"] = {
-        {"total_nodes", static_cast<int>(exportPoints.size())},
-        {"total_facets", static_cast<int>(exportFaces.size())}
-    };
-
-    json points = json::array();
-    for(size_t i = 0; i < exportPoints.size(); ++i){
-        const auto& pos = exportPoints[i];
-        points.push_back({
-            {"index", static_cast<int>(i)},
-            {"position", {pos.x(), pos.y(), pos.z()}}
-        });
-    }
-
-    json facets = json::array();
-    for(const auto& faceIndices : exportFaces){
-        assert(faceIndices.size() == 3 && "The mesh does not contain any triangular faces.");
-        facets.push_back({
-            {"vertices", faceIndices}
-        });
-    }
-
-    meshData["sub_listings"] = {
-        {"points", points},
-        {"facets", facets}
-    };
-    meshData["export"]["MeshExporter"]["vertices"] = points;
-    meshData["export"]["MeshExporter"]["facets"] = facets;
-    
-    if(includeTopologyInfo && interfaceMeshForTopology != nullptr){
-        std::unordered_set<uint64_t> originalEdgeSet;
-        originalEdgeSet.reserve(originalFaces.size() * 3);
-        for(const auto* face : originalFaces){
-            if(!face || !face->edges()) continue;
-            auto* edge = face->edges();
-            do{
-                int v1 = edge->vertex1()->index();
-                int v2 = edge->vertex2()->index();
-                if(v1 > v2) std::swap(v1, v2);
-                uint64_t key = (static_cast<uint64_t>(static_cast<uint32_t>(v1)) << 32)
-                    | static_cast<uint32_t>(v2);
-                originalEdgeSet.insert(key);
-                edge = edge->nextFaceEdge();
-            }while(edge != face->edges());
-        }
-
-        meshData["topology"] = {
-            {"euler_characteristic", static_cast<int>(originalVertices.size()) - static_cast<int>(originalEdgeSet.size()) + static_cast<int>(originalFaces.size())},
-            {"is_completely_good", interfaceMeshForTopology->isCompletelyGood()},
-            {"is_completely_bad", interfaceMeshForTopology->isCompletelyBad()}
-        };
-    }
-    
-    return meshData;
-}
-
-json buildDefectMeshJson(
-    const InterfaceMesh& interfaceMesh,
-    const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo
-){
-    return buildMeshJson(interfaceMesh, structureAnalysis, includeTopologyInfo, &interfaceMesh);
-}
-
-json buildDelaunayTessellationJson(const DelaunayTessellation& tessellation){
-    std::unordered_map<std::uint64_t, int> exportVertexIndices;
+    // Pass 1: collect unique vertices and faces
+    std::unordered_map<std::uint64_t, int> vertexMap;
     std::vector<Point3> exportPoints;
     std::set<std::array<std::uint64_t, 3>> exportedFaces;
-
+    struct FaceEntry{ std::array<int,3> verts; bool isBoundary; };
+    std::vector<FaceEntry> exportFaces;
     exportPoints.reserve(tessellation.numberOfPrimaryTetrahedra() * 2);
 
-    json facets = json::array();
-    int primaryTetrahedra = 0;
-    int boundaryFacets = 0;
-    int internalFacets = 0;
+    int primaryTetrahedra = 0, boundaryFacets = 0, internalFacets = 0;
 
     for(DelaunayTessellation::CellHandle cell : tessellation.cells()){
-        if(!tessellation.isValidCell(cell) || tessellation.isGhostCell(cell)){
-            continue;
-        }
-
+        if(!tessellation.isValidCell(cell) || tessellation.isGhostCell(cell)) continue;
         ++primaryTetrahedra;
-
         for(int face = 0; face < 4; ++face){
             const auto facet = tessellation.mirrorFacet(cell, face);
             const auto v0 = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, 0));
             const auto v1 = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, 1));
             const auto v2 = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, 2));
+            if(!exportedFaces.insert(canonicalFaceKey(v0, v1, v2)).second) continue;
 
-            if(!exportedFaces.insert(canonicalFaceKey(v0, v1, v2)).second){
-                continue;
+            const bool isBoundary = !tessellation.isValidCell(facet.first) || tessellation.isGhostCell(facet.first);
+            isBoundary ? ++boundaryFacets : ++internalFacets;
+
+            std::array<int,3> faceIdx{};
+            for(int vi = 0; vi < 3; ++vi){
+                const auto h = (vi == 0 ? v0 : vi == 1 ? v1 : v2);
+                auto [it, ins] = vertexMap.emplace(static_cast<uint64_t>(h), static_cast<int>(exportPoints.size()));
+                if(ins) exportPoints.push_back(tessellation.vertexPosition(h));
+                faceIdx[vi] = it->second;
             }
-
-            if(!tessellation.isValidCell(facet.first) || tessellation.isGhostCell(facet.first)){
-                ++boundaryFacets;
-            }else{
-                ++internalFacets;
-            }
-
-            std::array<int, 3> faceIndices{};
-            const std::array<DelaunayTessellation::VertexHandle, 3> handles{v0, v1, v2};
-            for(std::size_t vertexIndex = 0; vertexIndex < handles.size(); ++vertexIndex){
-                const std::uint64_t handleKey = static_cast<std::uint64_t>(handles[vertexIndex]);
-                auto [entry, inserted] = exportVertexIndices.emplace(handleKey, static_cast<int>(exportPoints.size()));
-                if(inserted){
-                    exportPoints.push_back(tessellation.vertexPosition(handles[vertexIndex]));
-                }
-                faceIndices[vertexIndex] = entry->second;
-            }
-
-            facets.push_back({
-                {"vertices", {faceIndices[0], faceIndices[1], faceIndices[2]}}
-            });
+            exportFaces.push_back({faceIdx, isBoundary});
         }
     }
 
-    json points = json::array();
-    for(std::size_t index = 0; index < exportPoints.size(); ++index){
-        const Point3& point = exportPoints[index];
-        points.push_back({
-            {"index", static_cast<int>(index)},
-            {"position", {point.x(), point.y(), point.z()}}
-        });
+    // Pass 2: stream to file
+    std::ofstream of(filePath, std::ios::binary);
+    MsgpackWriter w(of);
+
+    w.write_map_header(3);
+
+    w.write_key("main_listing");
+    w.write_map_header(5);
+    w.write_key("total_primary_tetrahedra"); w.write_int(primaryTetrahedra);
+    w.write_key("total_nodes"); w.write_int(static_cast<int64_t>(exportPoints.size()));
+    w.write_key("total_facets"); w.write_int(static_cast<int64_t>(exportFaces.size()));
+    w.write_key("boundary_facets"); w.write_int(boundaryFacets);
+    w.write_key("internal_facets"); w.write_int(internalFacets);
+
+    w.write_key("sub_listings");
+    w.write_map_header(2);
+    w.write_key("points");
+    w.write_array_header(static_cast<uint32_t>(exportPoints.size()));
+    for(size_t i = 0; i < exportPoints.size(); ++i){
+        w.write_map_header(2);
+        w.write_key("index"); w.write_int(static_cast<int64_t>(i));
+        w.write_key("position"); w.write_array_header(3);
+        w.write_double(exportPoints[i].x()); w.write_double(exportPoints[i].y()); w.write_double(exportPoints[i].z());
+    }
+    w.write_key("facets");
+    w.write_array_header(static_cast<uint32_t>(exportFaces.size()));
+    for(const auto& f : exportFaces){
+        w.write_map_header(1);
+        w.write_key("vertices"); w.write_array_header(3);
+        w.write_int(f.verts[0]); w.write_int(f.verts[1]); w.write_int(f.verts[2]);
     }
 
-    json meshData;
-    meshData["main_listing"] = {
-        {"total_primary_tetrahedra", primaryTetrahedra},
-        {"total_nodes", static_cast<int>(exportPoints.size())},
-        {"total_facets", static_cast<int>(facets.size())},
-        {"boundary_facets", boundaryFacets},
-        {"internal_facets", internalFacets}
-    };
-    meshData["sub_listings"] = {
-        {"points", points},
-        {"facets", facets}
-    };
-    meshData["export"]["MeshExporter"]["vertices"] = points;
-    meshData["export"]["MeshExporter"]["facets"] = facets;
-    return meshData;
+    w.write_key("export");
+    w.write_map_header(1);
+    w.write_key("MeshExporter");
+    w.write_map_header(2);
+    w.write_key("vertices");
+    w.write_array_header(static_cast<uint32_t>(exportPoints.size()));
+    for(size_t i = 0; i < exportPoints.size(); ++i){
+        w.write_map_header(2);
+        w.write_key("index"); w.write_int(static_cast<int64_t>(i));
+        w.write_key("position"); w.write_array_header(3);
+        w.write_double(exportPoints[i].x()); w.write_double(exportPoints[i].y()); w.write_double(exportPoints[i].z());
+    }
+    w.write_key("facets");
+    w.write_array_header(static_cast<uint32_t>(exportFaces.size()));
+    for(const auto& f : exportFaces){
+        w.write_map_header(1);
+        w.write_key("vertices"); w.write_array_header(3);
+        w.write_int(f.verts[0]); w.write_int(f.verts[1]); w.write_int(f.verts[2]);
+    }
+    of.flush();
 }
 
-json buildStructureIdentificationJson(
+void streamCoherentCrystallineRegionsToFile(
+    const std::string& filePath,
     const LammpsParser::Frame& frame,
     const StructureAnalysis& structureAnalysis
 ){
     const StructureContext& context = structureAnalysis.context();
 
-    std::map<int, std::vector<std::size_t>> atomIndicesByStructure;
-    int clusteredAtoms = 0;
-    for(std::size_t atomIndex = 0; atomIndex < context.atomCount(); ++atomIndex){
-        const int structureType = context.structureTypes
-            ? context.structureTypes->getInt(atomIndex)
-            : static_cast<int>(StructureType::OTHER);
-        atomIndicesByStructure[structureType].push_back(atomIndex);
-        if(context.atomClusters && context.atomClusters->getInt(atomIndex) != 0){
-            ++clusteredAtoms;
-        }
-    }
-
-    json structures = json::array();
-    json atomsByStructure = json::object();
-    for(const auto& [structureType, atomIndices] : atomIndicesByStructure){
-        if(atomIndices.empty()){
-            continue;
-        }
-
-        const std::string structureName = structureTypeNameForExport(structureType);
-        json atoms = json::array();
-        for(std::size_t atomIndex : atomIndices){
-            atoms.push_back(buildAtomExportRecord(frame, structureAnalysis, atomIndex));
-        }
-
-        atomsByStructure[structureName] = std::move(atoms);
-        structures.push_back({
-            {"structure_id", structureType},
-            {"structure_name", structureName},
-            {"atom_count", static_cast<int>(atomIndices.size())}
-        });
-    }
-
-    json result;
-    result["main_listing"] = {
-        {"total_atoms", static_cast<int>(context.atomCount())},
-        {"structure_count", static_cast<int>(structures.size())},
-        {"clustered_atoms", clusteredAtoms},
-        {"unclustered_atoms", static_cast<int>(context.atomCount()) - clusteredAtoms}
-    };
-    result["sub_listings"] = {
-        {"structures", structures}
-    };
-    result["export"]["AtomisticExporter"] = std::move(atomsByStructure);
-    return result;
-}
-
-json buildCoherentCrystallineRegionsJson(
-    const LammpsParser::Frame& frame,
-    const StructureAnalysis& structureAnalysis
-){
-    const StructureContext& context = structureAnalysis.context();
-
+    // Pass 1: group atoms by cluster
     std::map<int, std::vector<std::size_t>> atomIndicesByCluster;
     int unassignedAtoms = 0;
-    for(std::size_t atomIndex = 0; atomIndex < context.atomCount(); ++atomIndex){
-        const int clusterId = context.atomClusters
-            ? context.atomClusters->getInt(atomIndex)
-            : 0;
-        if(clusterId == 0){
-            ++unassignedAtoms;
-            continue;
-        }
-
-        atomIndicesByCluster[clusterId].push_back(atomIndex);
+    for(std::size_t i = 0; i < context.atomCount(); ++i){
+        const int clusterId = context.atomClusters ? context.atomClusters->getInt(i) : 0;
+        if(clusterId == 0){ ++unassignedAtoms; continue; }
+        atomIndicesByCluster[clusterId].push_back(i);
     }
 
-    json coherentRegions = json::array();
-    json atomsByCluster = json::object();
     int largestRegionSize = 0;
-
-    for(const auto& [clusterId, atomIndices] : atomIndicesByCluster){
-        if(atomIndices.empty()){
-            continue;
-        }
-
-        const std::size_t representativeAtomIndex = atomIndices.front();
-        const int structureType = context.structureTypes
-            ? context.structureTypes->getInt(representativeAtomIndex)
-            : static_cast<int>(StructureType::OTHER);
-        const std::string structureName = structureTypeNameForExport(structureType);
-        const Cluster* cluster = structureAnalysis.clusterGraph().findCluster(clusterId);
-
-        json atoms = json::array();
-        for(std::size_t atomIndex : atomIndices){
-            atoms.push_back(buildAtomExportRecord(frame, structureAnalysis, atomIndex));
-        }
-
-        const std::string clusterName = "Cluster " + std::to_string(clusterId);
-        atomsByCluster[clusterName] = std::move(atoms);
-        coherentRegions.push_back({
-            {"cluster_id", clusterId},
-            {"cluster_name", clusterName},
-            {"atom_count", static_cast<int>(atomIndices.size())},
-            {"structure_id", structureType},
-            {"structure_name", structureName},
-            {"topology_name", cluster && !cluster->topologyName.empty() ? cluster->topologyName : topologyNameForAtomExport(structureAnalysis, representativeAtomIndex, structureType)}
-        });
-        largestRegionSize = std::max(largestRegionSize, static_cast<int>(atomIndices.size()));
-    }
+    for(const auto& [_, indices] : atomIndicesByCluster)
+        largestRegionSize = std::max(largestRegionSize, static_cast<int>(indices.size()));
 
     const int assignedAtoms = static_cast<int>(context.atomCount()) - unassignedAtoms;
-    json result;
-    result["main_listing"] = {
-        {"total_atoms", static_cast<int>(context.atomCount())},
-        {"coherent_region_count", static_cast<int>(coherentRegions.size())},
-        {"assigned_atoms", assignedAtoms},
-        {"unassigned_atoms", unassignedAtoms},
-        {"largest_region_size", largestRegionSize}
-    };
-    result["sub_listings"] = {
-        {"coherent_crystalline_regions", coherentRegions}
-    };
-    result["export"]["AtomisticExporter"] = std::move(atomsByCluster);
-    return result;
+    const int baseAtomFields = 6; // id, pos, structure_id, structure_name, cluster_id, topology_name (optional)
+
+    // Pass 2: stream
+    std::ofstream of(filePath, std::ios::binary);
+    MsgpackWriter w(of);
+
+    w.write_map_header(3);
+
+    w.write_key("main_listing");
+    w.write_map_header(5);
+    w.write_key("total_atoms"); w.write_int(static_cast<int64_t>(context.atomCount()));
+    w.write_key("coherent_region_count"); w.write_int(static_cast<int64_t>(atomIndicesByCluster.size()));
+    w.write_key("assigned_atoms"); w.write_int(assignedAtoms);
+    w.write_key("unassigned_atoms"); w.write_int(unassignedAtoms);
+    w.write_key("largest_region_size"); w.write_int(largestRegionSize);
+
+    w.write_key("sub_listings");
+    w.write_map_header(1);
+    w.write_key("coherent_crystalline_regions");
+    w.write_array_header(static_cast<uint32_t>(atomIndicesByCluster.size()));
+    for(const auto& [clusterId, atomIndices] : atomIndicesByCluster){
+        const std::size_t rep = atomIndices.front();
+        const int stype = context.structureTypes ? context.structureTypes->getInt(rep) : static_cast<int>(StructureType::OTHER);
+        const Cluster* cluster = structureAnalysis.clusterGraph().findCluster(clusterId);
+        const std::string topo = cluster && !cluster->topologyName.empty()
+            ? cluster->topologyName : topologyNameForAtomExport(structureAnalysis, rep, stype);
+        const std::string clusterName = "Cluster " + std::to_string(clusterId);
+        w.write_map_header(6);
+        w.write_key("cluster_id"); w.write_int(clusterId);
+        w.write_key("cluster_name"); w.write_str(clusterName);
+        w.write_key("atom_count"); w.write_int(static_cast<int64_t>(atomIndices.size()));
+        w.write_key("structure_id"); w.write_int(stype);
+        w.write_key("structure_name"); w.write_str(structureTypeNameForExport(stype));
+        w.write_key("topology_name"); w.write_str(topo);
+    }
+
+    w.write_key("export");
+    w.write_map_header(1);
+    w.write_key("AtomisticExporter");
+    w.write_map_header(static_cast<uint32_t>(atomIndicesByCluster.size()));
+    for(const auto& [clusterId, atomIndices] : atomIndicesByCluster){
+        const std::string clusterName = "Cluster " + std::to_string(clusterId);
+        w.write_key(clusterName);
+        w.write_array_header(static_cast<uint32_t>(atomIndices.size()));
+        for(std::size_t atomIndex : atomIndices){
+            const int stype = context.structureTypes ? context.structureTypes->getInt(atomIndex) : static_cast<int>(StructureType::OTHER);
+            const int clustId = context.atomClusters ? context.atomClusters->getInt(atomIndex) : 0;
+            const std::string topo = topologyNameForAtomExport(structureAnalysis, atomIndex, stype);
+            const int nfields = topo.empty() ? (baseAtomFields - 1) : baseAtomFields;
+            w.write_map_header(static_cast<uint32_t>(nfields));
+            w.write_key("id"); w.write_int(atomIndex < frame.ids.size() ? frame.ids[atomIndex] : static_cast<int>(atomIndex));
+            w.write_key("pos"); w.write_array_header(3);
+            const auto& pos = atomIndex < frame.positions.size() ? frame.positions[atomIndex] : Point3::Origin();
+            w.write_double(pos.x()); w.write_double(pos.y()); w.write_double(pos.z());
+            w.write_key("structure_id"); w.write_int(stype);
+            w.write_key("structure_type"); w.write_int(stype);
+            w.write_key("structure_name"); w.write_str(structureTypeNameForExport(stype));
+            w.write_key("cluster_id"); w.write_int(clustId);
+            if(!topo.empty()){ w.write_key("topology_name"); w.write_str(topo); }
+        }
+    }
+    of.flush();
 }
 
 json getNetworkStatistics(const DislocationNetwork* network, double cellVolume){
