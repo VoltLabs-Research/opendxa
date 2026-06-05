@@ -3,6 +3,7 @@
 #include <volt/helpers/crystal_path_finder.h>
 #include <volt/pipeline/elastic_mapping.h>
 #include <tbb/parallel_for.h>
+#include <tbb/parallel_sort.h>
 #include <mutex>
 #include <algorithm>
 #include <atomic>
@@ -87,67 +88,35 @@ void ElasticMapping::generateTessellationEdges(){
         return;
     }
 
-    size_t maxUniqueEdges = 0;
-    for(const auto& chunk : sortedEdgeChunks){
-        maxUniqueEdges += chunk.size();
+    size_t totalKeys = 0;
+    for(const auto& chunk : sortedEdgeChunks)
+        totalKeys += chunk.size();
+
+    std::vector<uint64_t> allKeys;
+    allKeys.reserve(totalKeys);
+    for(auto& chunk : sortedEdgeChunks){
+        allKeys.insert(allKeys.end(), chunk.begin(), chunk.end());
+        std::vector<uint64_t>().swap(chunk);
     }
-    _edges.reserve(maxUniqueEdges);
-
-    struct HeapEntry{
-        uint64_t key;
-        size_t chunkIndex;
-        size_t offset;
-    };
-    auto compareEntries = [](const HeapEntry& a, const HeapEntry& b){
-        return a.key > b.key;
-    };
-    std::priority_queue<
-        HeapEntry,
-        std::vector<HeapEntry>,
-        decltype(compareEntries)
-    > minHeap(compareEntries);
-
-    for(size_t i = 0; i < sortedEdgeChunks.size(); ++i){
-        if(!sortedEdgeChunks[i].empty()){
-            minHeap.push({sortedEdgeChunks[i][0], i, 0});
-        }
-    }
-
-    _edgeCount = 0;
-    bool hasPreviousKey = false;
-    uint64_t previousKey = 0;
-    while(!minHeap.empty()){
-        HeapEntry entry = minHeap.top();
-        minHeap.pop();
-
-        if(!hasPreviousKey || entry.key != previousKey){
-            hasPreviousKey = true;
-            previousKey = entry.key;
-            const int v1 = static_cast<int>(entry.key >> 32);
-            const int v2 = static_cast<int>(entry.key & 0xFFFFFFFFu);
-            const int edgeIndex = static_cast<int>(_edges.size());
-            _edges.emplace_back(v1, v2);
-            auto& edge = _edges.back();
-            edge.nextLeavingEdge = _vertexEdges[v1].first;
-            _vertexEdges[v1].first = edgeIndex;
-
-            edge.nextArrivingEdge = _vertexEdges[v2].second;
-            _vertexEdges[v2].second = edgeIndex;
-            ++_edgeCount;
-        }
-
-        auto& keys = sortedEdgeChunks[entry.chunkIndex];
-        const size_t nextOffset = entry.offset + 1;
-        if(nextOffset < keys.size()){
-            minHeap.push({keys[nextOffset], entry.chunkIndex, nextOffset});
-        }else{
-            std::vector<uint64_t>().swap(keys);
-        }
-    }
-
     std::vector<std::vector<uint64_t>>().swap(sortedEdgeChunks);
 
-    _edges.shrink_to_fit();
+    tbb::parallel_sort(allKeys.begin(), allKeys.end());
+    allKeys.erase(std::unique(allKeys.begin(), allKeys.end()), allKeys.end());
+
+    _edges.reserve(allKeys.size());
+    _edgeCount = 0;
+    for(uint64_t key : allKeys){
+        const int v1 = static_cast<int>(key >> 32);
+        const int v2 = static_cast<int>(key & 0xFFFFFFFFu);
+        const int edgeIndex = static_cast<int>(_edges.size());
+        _edges.emplace_back(v1, v2);
+        auto& edge = _edges.back();
+        edge.nextLeavingEdge = _vertexEdges[v1].first;
+        _vertexEdges[v1].first = edgeIndex;
+        edge.nextArrivingEdge = _vertexEdges[v2].second;
+        _vertexEdges[v2].second = edgeIndex;
+        ++_edgeCount;
+    }
 }
 
 // Once we have a graph of edges connecting mesh vertices, we need to assign
