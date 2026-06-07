@@ -1,0 +1,29 @@
+{
+  "name": "@voltlabs/opendxa",
+  "version": "1.0.2",
+  "kind": "workflow",
+  "publisher": "voltlabs",
+  "description": "Identifies and characterizes dislocations using the user-selected structure identification method.",
+  "license": "MIT",
+  "homepage": "https://github.com/voltlabs-research/opendxa",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/voltlabs-research/opendxa"
+  },
+  "entrypoints": {
+    "binary": "opendxa-plugin.zip",
+    "workflow": "plugin.json"
+  },
+  "platforms": [
+    "linux-x86_64",
+    "darwin-arm64",
+    "windows-x86_64"
+  ],
+  "coretoolkit": "1.0.0",
+  "files": [
+    "plugin.json",
+    "scripts",
+    "bin",
+    "lib"
+  ]
+}
