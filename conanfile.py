@@ -13,7 +13,7 @@ class OpenDXAConan(ConanFile):
         "boost/1.88.0",
         "onetbb/2021.12.0",
         "coretoolkit/1.0.0",
-        "structure-identification/1.0.0",
+        "structure-identification/1.0.1",
         "spdlog/1.14.1",
         "nlohmann_json/3.11.3",
         "yaml-cpp/0.8.0",
