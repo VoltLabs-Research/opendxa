@@ -4,7 +4,7 @@ from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
 
 class OpenDXAConan(ConanFile):
     name = "opendxa"
-    version = "1.0.6"
+    version = "1.0.7"
     package_type = "static-library"
     license = "MIT"
     settings = "os", "arch", "compiler", "build_type"
