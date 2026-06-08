@@ -308,7 +308,7 @@ void streamCoherentCrystallineRegionsToFile(
         largestRegionSize = std::max(largestRegionSize, static_cast<int>(indices.size()));
 
     const int assignedAtoms = static_cast<int>(context.atomCount()) - unassignedAtoms;
-    const int baseAtomFields = 6; // id, pos, structure_id, structure_name, cluster_id, topology_name (optional)
+    const int baseAtomFields = 7; // id, pos, structure_id, structure_type, structure_name, cluster_id, topology_name (optional)
 
     // Pass 2: stream
     std::ofstream of(filePath, std::ios::binary);
