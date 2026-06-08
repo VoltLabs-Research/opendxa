@@ -682,9 +682,32 @@ void streamDislocationsToFile(
     w.write_key("min_segment_length"); w.write_double(minLength);
     w.write_key("total_length"); w.write_double(totalLength);
 
-    // "sub_listings" - empty for streaming (data is in export)
-    w.write_key("sub_listings");
-    w.write_nil();
+    // "sub_listings": circuit / network / junction tables, gated by export flags.
+    // These reuse the existing analyzers (getNetworkStatistics / getCircuitInformation /
+    // getJunctionInformation) and are emitted through the streaming writer via the
+    // json->msgpack bridge.
+    {
+        const double cellVolume = simulationCell ? simulationCell->volume3D() : 0.0;
+        const int subListingCount =
+            (options.exportDislocationNetworkStats ? 1 : 0)
+            + (options.exportCircuitInformation ? 1 : 0)
+            + (options.exportJunctions ? 1 : 0);
+
+        w.write_key("sub_listings");
+        w.write_map_header(static_cast<uint32_t>(subListingCount));
+        if(options.exportDislocationNetworkStats){
+            w.write_key("network_statistics");
+            JsonUtils::writeJsonAsMsgpack(w, getNetworkStatistics(network, cellVolume), false);
+        }
+        if(options.exportCircuitInformation){
+            w.write_key("circuit_information");
+            JsonUtils::writeJsonAsMsgpack(w, getCircuitInformation(network), false);
+        }
+        if(options.exportJunctions){
+            w.write_key("junction_information");
+            JsonUtils::writeJsonAsMsgpack(w, getJunctionInformation(network), false);
+        }
+    }
 
     of.flush();
 }
