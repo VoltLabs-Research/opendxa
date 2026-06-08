@@ -171,16 +171,21 @@ void DelaunayTessellation::generateTessellation(
 		}
 	}
 
-	spdlog::info("  Geogram PDEL: inserting {} points ({} primary + {} ghost)",
+	spdlog::info("  Geogram Delaunay (serial BDEL): inserting {} points ({} primary + {} ghost)",
 		_pointData.size(), _primaryVertexCount, _pointData.size() - _primaryVertexCount);
 
-	// Use PDEL (Parallel Delaunay) instead of BDEL
-	_dt = GEO::Delaunay::create(3, "PDEL");
+	// Use BDEL (serial Delaunay3d) instead of PDEL (ParallelDelaunay3d).
+	// PDEL deadlocks/livelocks on high-core hosts: reproduced on a 160-core
+	// EPYC where it hangs at point insertion regardless of the configured
+	// thread count (160 threads -> spin at 99.9% CPU; 1 thread -> sleeping
+	// deadlock). The serial backend is robust and fast enough for our point
+	// counts (tens of thousands of points).
+	_dt = GEO::Delaunay::create(3, "BDEL");
 	_dt->set_keeps_infinite(true);
 	_dt->set_reorder(true);
 	_dt->set_vertices(_pointData.size(), reinterpret_cast<const double*>(_pointData.data()));
 
-	spdlog::info("  Geogram PDEL complete: {} cells", _dt->nb_cells());
+	spdlog::info("  Geogram Delaunay (serial BDEL) complete: {} cells", _dt->nb_cells());
 
 	// Classify cells (parallel)
 	const size_t numCells = _dt->nb_cells();
