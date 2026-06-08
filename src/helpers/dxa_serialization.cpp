@@ -682,19 +682,55 @@ void streamDislocationsToFile(
     w.write_key("min_segment_length"); w.write_double(minLength);
     w.write_key("total_length"); w.write_double(totalLength);
 
-    // "sub_listings": circuit / network / junction tables, gated by export flags.
-    // These reuse the existing analyzers (getNetworkStatistics / getCircuitInformation /
-    // getJunctionInformation) and are emitted through the streaming writer via the
-    // json->msgpack bridge.
+    // "sub_listings": per-segment table plus circuit / network / junction tables.
+    // The per-segment listing ("dislocation_segments") reuses the already-computed
+    // chunks; the others reuse the analyzers via the json->msgpack bridge.
     {
         const double cellVolume = simulationCell ? simulationCell->volume3D() : 0.0;
         const int subListingCount =
-            (options.exportDislocationNetworkStats ? 1 : 0)
+            1 // dislocation_segments (always emitted)
+            + (options.exportDislocationNetworkStats ? 1 : 0)
             + (options.exportCircuitInformation ? 1 : 0)
             + (options.exportJunctions ? 1 : 0);
 
         w.write_key("sub_listings");
         w.write_map_header(static_cast<uint32_t>(subListingCount));
+
+        // Per-segment listing (OVITO-style): one row per dislocation segment.
+        w.write_key("dislocation_segments");
+        w.write_array_header(static_cast<uint32_t>(validSegments.size()));
+        for(size_t i = 0; i < validSegments.size(); ++i){
+            const DislocationSegment* seg = validSegments[i];
+            const Vector3 burgersLocal = seg->burgersVector.localVec();
+            const Vector3 burgersSpatial = getGlobalBurgersVector(seg->burgersVector);
+            const Cluster* cluster = seg->burgersVector.cluster();
+            const Point3& head = seg->line.front();
+            const Point3& tail = seg->line.back();
+            const std::string crystalStructure = cluster
+                ? (!cluster->topologyName.empty()
+                    ? cluster->topologyName
+                    : structureTypeNameForExport(cluster->structure))
+                : std::string();
+
+            w.write_map_header(8);
+            w.write_key("segment_id"); w.write_int(static_cast<int64_t>(i));
+            w.write_key("burgers_vector");
+            w.write_array_header(3);
+            w.write_double(burgersLocal.x()); w.write_double(burgersLocal.y()); w.write_double(burgersLocal.z());
+            w.write_key("spatial_burgers_vector");
+            w.write_array_header(3);
+            w.write_double(burgersSpatial.x()); w.write_double(burgersSpatial.y()); w.write_double(burgersSpatial.z());
+            w.write_key("length"); w.write_double(seg->calculateLength());
+            w.write_key("cluster"); w.write_int(cluster ? cluster->id : 0);
+            w.write_key("crystal_structure"); w.write_str(crystalStructure);
+            w.write_key("head_vertex");
+            w.write_array_header(3);
+            w.write_double(head.x()); w.write_double(head.y()); w.write_double(head.z());
+            w.write_key("tail_vertex");
+            w.write_array_header(3);
+            w.write_double(tail.x()); w.write_double(tail.y()); w.write_double(tail.z());
+        }
+
         if(options.exportDislocationNetworkStats){
             w.write_key("network_statistics");
             JsonUtils::writeJsonAsMsgpack(w, getNetworkStatistics(network, cellVolume), false);
