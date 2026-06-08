@@ -564,6 +564,8 @@ void streamDislocationsToFile(
         Vector3 burgersLocal;
         Vector3 burgersGlobal;
         double magnitude;
+        int clusterId = 0;
+        std::string crystalStructure;
     };
     std::vector<Chunk> chunks;
     chunks.reserve(validSegments.size() * 2);
@@ -585,6 +587,13 @@ void streamDislocationsToFile(
             c.burgersLocal = segment->burgersVector.localVec();
             c.burgersGlobal = getGlobalBurgersVector(segment->burgersVector);
             c.magnitude = c.burgersLocal.length();
+            const Cluster* chunkCluster = segment->burgersVector.cluster();
+            c.clusterId = chunkCluster ? chunkCluster->id : 0;
+            c.crystalStructure = chunkCluster
+                ? (!chunkCluster->topologyName.empty()
+                    ? chunkCluster->topologyName
+                    : structureTypeNameForExport(chunkCluster->structure))
+                : std::string();
             chunks.push_back(std::move(c));
 
             totalLength += len;
@@ -696,33 +705,26 @@ void streamDislocationsToFile(
         w.write_key("sub_listings");
         w.write_map_header(static_cast<uint32_t>(subListingCount));
 
-        // Per-segment listing (OVITO-style): one row per dislocation segment.
+        // Per-segment listing (post-PBC pieces, matching the rendered polylines).
+        // segment_id lines up 1:1 with the DislocationExporter segment ids.
         w.write_key("dislocation_segments");
-        w.write_array_header(static_cast<uint32_t>(validSegments.size()));
-        for(size_t i = 0; i < validSegments.size(); ++i){
-            const DislocationSegment* seg = validSegments[i];
-            const Vector3 burgersLocal = seg->burgersVector.localVec();
-            const Vector3 burgersSpatial = getGlobalBurgersVector(seg->burgersVector);
-            const Cluster* cluster = seg->burgersVector.cluster();
-            const Point3& head = seg->line.front();
-            const Point3& tail = seg->line.back();
-            const std::string crystalStructure = cluster
-                ? (!cluster->topologyName.empty()
-                    ? cluster->topologyName
-                    : structureTypeNameForExport(cluster->structure))
-                : std::string();
+        w.write_array_header(static_cast<uint32_t>(chunks.size()));
+        for(size_t i = 0; i < chunks.size(); ++i){
+            const auto& c = chunks[i];
+            const Point3 head = c.points.empty() ? Point3::Origin() : c.points.front();
+            const Point3 tail = c.points.empty() ? Point3::Origin() : c.points.back();
 
             w.write_map_header(8);
             w.write_key("segment_id"); w.write_int(static_cast<int64_t>(i));
             w.write_key("burgers_vector");
             w.write_array_header(3);
-            w.write_double(burgersLocal.x()); w.write_double(burgersLocal.y()); w.write_double(burgersLocal.z());
+            w.write_double(c.burgersLocal.x()); w.write_double(c.burgersLocal.y()); w.write_double(c.burgersLocal.z());
             w.write_key("spatial_burgers_vector");
             w.write_array_header(3);
-            w.write_double(burgersSpatial.x()); w.write_double(burgersSpatial.y()); w.write_double(burgersSpatial.z());
-            w.write_key("length"); w.write_double(seg->calculateLength());
-            w.write_key("cluster"); w.write_int(cluster ? cluster->id : 0);
-            w.write_key("crystal_structure"); w.write_str(crystalStructure);
+            w.write_double(c.burgersGlobal.x()); w.write_double(c.burgersGlobal.y()); w.write_double(c.burgersGlobal.z());
+            w.write_key("length"); w.write_double(c.length);
+            w.write_key("cluster"); w.write_int(c.clusterId);
+            w.write_key("crystal_structure"); w.write_str(c.crystalStructure);
             w.write_key("head_vertex");
             w.write_array_header(3);
             w.write_double(head.x()); w.write_double(head.y()); w.write_double(head.z());
