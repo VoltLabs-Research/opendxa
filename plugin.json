@@ -229,7 +229,7 @@
           "exposure": {
             "name": "Dislocations",
             "icon": "HiCube",
-            "results": "dislocations.msgpack",
+            "results": "dislocations.parquet",
             "iterable": ""
           }
         }
@@ -278,7 +278,7 @@
           "exposure": {
             "name": "Defect Mesh",
             "icon": "HiCube",
-            "results": "defect_mesh.msgpack",
+            "results": "defect_mesh.parquet",
             "iterable": ""
           }
         }
@@ -308,7 +308,7 @@
           "exposure": {
             "name": "Interface Mesh",
             "icon": "HiCube",
-            "results": "interface_mesh.msgpack",
+            "results": "interface_mesh.parquet",
             "iterable": ""
           }
         }
@@ -338,7 +338,7 @@
           "exposure": {
             "name": "Structure Identification",
             "icon": "HiCube",
-            "results": "atoms.msgpack",
+            "results": "atoms.parquet",
             "iterable": ""
           }
         }
@@ -368,7 +368,7 @@
           "exposure": {
             "name": "Crystalline Coherent Regions",
             "icon": "HiCube",
-            "results": "coherent_crystalline_regions.msgpack",
+            "results": "coherent_crystalline_regions.parquet",
             "iterable": ""
           }
         }
@@ -398,7 +398,7 @@
           "exposure": {
             "name": "Burgers Segment Counts",
             "icon": "HiChartBar",
-            "results": "dislocations.msgpack",
+            "results": "dislocations.parquet",
             "iterable": "",
             "hasListing": false
           }
@@ -442,7 +442,7 @@
           "exposure": {
             "name": "Burgers Length Distribution",
             "icon": "HiChartBar",
-            "results": "dislocations.msgpack",
+            "results": "dislocations.parquet",
             "iterable": "",
             "hasListing": false
           }
