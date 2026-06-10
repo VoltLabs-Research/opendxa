@@ -37,12 +37,12 @@ opendxa <annotated.dump> [output_base] [options]
 | `--interface_alpha_scale <float>` | No | Multiplier applied to the reconstructed maximum neighbor distance when running the interface alpha-shape filter. | `5.0` |
 | `--inteface_alpha_scale <float>` | No | Accepted alias for `--interface_alpha_scale`. | |
 | `--crystal_path_steps <int>` | No | Maximum crystal path depth used while assigning ideal edge vectors. | `4` |
-| `--export_defect_mesh <bool>` | No | Enable or disable writing `*_defect_mesh.msgpack`. | `true` |
-| `--export_interface_mesh <bool>` | No | Enable or disable writing `*_interface_mesh.msgpack`. | `false` |
-| `--export_dislocations <bool>` | No | Enable or disable writing `*_dislocations.msgpack`. | `true` |
-| `--export_circuit_information <bool>` | No | Include `circuit_information` inside the dislocations msgpack. | `true` |
-| `--export_dislocation_network_stats <bool>` | No | Include `network_statistics` inside the dislocations msgpack. | `true` |
-| `--export_junctions <bool>` | No | Include `junction_information` inside the dislocations msgpack. | `true` |
+| `--export_defect_mesh <bool>` | No | Enable or disable writing `*_defect_mesh.parquet`. | `true` |
+| `--export_interface_mesh <bool>` | No | Enable or disable writing `*_interface_mesh.parquet`. | `false` |
+| `--export_dislocations <bool>` | No | Enable or disable writing `*_dislocations.parquet`. | `true` |
+| `--export_circuit_information <bool>` | No | Include `circuit_information` inside the dislocations parquet. | `true` |
+| `--export_dislocation_network_stats <bool>` | No | Include `network_statistics` inside the dislocations parquet. | `true` |
+| `--export_junctions <bool>` | No | Include `junction_information` inside the dislocations parquet. | `true` |
 | `--clip_pbc_segments <bool>` | No | Clip exported dislocation polylines at periodic boundaries. If disabled, OpenDXA exports the raw traced lines. | `true` |
 | `--cover_domain_with_finite_tets <bool>` | No | Add helper points so the Delaunay domain is fully covered by finite tetrahedra. | `false` |
 | `--help` | No | Print CLI help. | |

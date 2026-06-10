@@ -35,6 +35,117 @@ std::string burgersVectorLabel(const Vector3& vector){
         + std::to_string(vector.z()) + "]";
 }
 
+struct BurgersFamilyMatch{
+    const char* name;
+    const char* label;
+};
+
+constexpr BurgersFamilyMatch OTHER_BURGERS_FAMILY{"Other", "Other"};
+
+// Burgers vectors arrive in the cluster lattice frame defined by the reference
+// lattice YAMLs (lattices/*.yml): cubic lattices use the conventional cubic cell
+// with unit lattice constant, so prototypes are exact lattice-fraction vectors.
+// Cubic matching is permutation/sign invariant (sorted absolute components).
+struct CubicBurgersFamily{
+    std::array<double, 3> sortedAbsComponents;
+    BurgersFamilyMatch family;
+};
+
+const CubicBurgersFamily FCC_BURGERS_FAMILIES[] = {
+    {{0.5, 0.5, 0.0}, {"1/2<110>", "1/2<110> (Perfect)"}},
+    {{1.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0}, {"1/6<112>", "1/6<112> (Shockley)"}},
+    {{1.0 / 6.0, 1.0 / 6.0, 0.0}, {"1/6<110>", "1/6<110> (Stair-rod)"}},
+    {{1.0 / 3.0, 0.0, 0.0}, {"1/3<100>", "1/3<100> (Hirth)"}},
+    {{1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0}, {"1/3<111>", "1/3<111> (Frank)"}}
+};
+
+const CubicBurgersFamily BCC_BURGERS_FAMILIES[] = {
+    {{0.5, 0.5, 0.5}, {"1/2<111>", "1/2<111> (Perfect)"}},
+    {{1.0, 0.0, 0.0}, {"<100>", "<100>"}},
+    {{1.0, 1.0, 0.0}, {"<110>", "<110>"}}
+};
+
+const CubicBurgersFamily SC_BURGERS_FAMILIES[] = {
+    {{1.0, 0.0, 0.0}, {"<100>", "<100>"}},
+    {{1.0, 1.0, 0.0}, {"<110>", "<110>"}},
+    {{1.0, 1.0, 1.0}, {"<111>", "<111>"}}
+};
+
+// The hexagonal reference frame (lattices/hcp.yml, hex_diamond.yml) keeps the
+// c axis along z with the FCC-equivalent length scale: in-plane nearest
+// neighbor distance a = 1/sqrt(2), ideal c = 2*sqrt(2/3)*a. Families are
+// rotation invariant about c, so they match on (basal, axial) magnitudes.
+struct HexagonalBurgersFamily{
+    double basalLength;
+    double axialLength;
+    BurgersFamilyMatch family;
+};
+
+const HexagonalBurgersFamily HCP_BURGERS_FAMILIES[] = {
+    {0.7071067811865476, 0.0, {"1/3<1-210>", "1/3<1-210> (Perfect basal)"}},
+    {0.4082482904638630, 0.0, {"1/3<1-100>", "1/3<1-100> (Shockley)"}},
+    {0.0, 1.1547005383792515, {"<0001>", "<0001> (Perfect c)"}},
+    {0.0, 0.5773502691896257, {"1/2<0001>", "1/2<0001> (Partial c)"}},
+    {0.7071067811865476, 1.1547005383792515, {"1/3<1-213>", "1/3<1-213> (Perfect c+a)"}}
+};
+
+template<std::size_t N>
+BurgersFamilyMatch matchCubicBurgersFamily(
+    const Vector3& localBurgers,
+    const CubicBurgersFamily (&families)[N],
+    double tolerance
+){
+    std::array<double, 3> components{
+        std::abs(localBurgers.x()),
+        std::abs(localBurgers.y()),
+        std::abs(localBurgers.z())
+    };
+    std::sort(components.begin(), components.end(), std::greater<double>());
+    for(const auto& candidate : families){
+        if(std::abs(components[0] - candidate.sortedAbsComponents[0]) < tolerance
+            && std::abs(components[1] - candidate.sortedAbsComponents[1]) < tolerance
+            && std::abs(components[2] - candidate.sortedAbsComponents[2]) < tolerance){
+            return candidate.family;
+        }
+    }
+    return OTHER_BURGERS_FAMILY;
+}
+
+BurgersFamilyMatch matchHexagonalBurgersFamily(const Vector3& localBurgers, double tolerance){
+    const double basal = std::hypot(localBurgers.x(), localBurgers.y());
+    const double axial = std::abs(localBurgers.z());
+    for(const auto& candidate : HCP_BURGERS_FAMILIES){
+        if(std::abs(basal - candidate.basalLength) < tolerance
+            && std::abs(axial - candidate.axialLength) < tolerance){
+            return candidate.family;
+        }
+    }
+    return OTHER_BURGERS_FAMILY;
+}
+
+BurgersFamilyMatch classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure){
+    LatticeStructureType structure = LATTICE_OTHER;
+    if(crystalStructure.empty() || !parseLatticeStructureType(crystalStructure, structure)){
+        return OTHER_BURGERS_FAMILY;
+    }
+
+    constexpr double tolerance = 0.01;
+    switch(structure){
+        case LATTICE_FCC:
+        case LATTICE_CUBIC_DIAMOND:
+            return matchCubicBurgersFamily(localBurgers, FCC_BURGERS_FAMILIES, tolerance);
+        case LATTICE_BCC:
+            return matchCubicBurgersFamily(localBurgers, BCC_BURGERS_FAMILIES, tolerance);
+        case LATTICE_SC:
+            return matchCubicBurgersFamily(localBurgers, SC_BURGERS_FAMILIES, tolerance);
+        case LATTICE_HCP:
+        case LATTICE_HEX_DIAMOND:
+            return matchHexagonalBurgersFamily(localBurgers, tolerance);
+        default:
+            return OTHER_BURGERS_FAMILY;
+    }
+}
+
 std::string structureTypeNameForExport(int structureType){
     return structureTypeName(structureType);
 }
@@ -233,58 +344,31 @@ void streamDelaunayTessellationToFile(
         }
     }
 
-    // Pass 2: stream to file
-    std::ofstream of(filePath, std::ios::binary);
-    MsgpackWriter w(of);
-
-    w.write_map_header(3);
-
-    w.write_key("main_listing");
-    w.write_map_header(5);
-    w.write_key("total_primary_tetrahedra"); w.write_int(primaryTetrahedra);
-    w.write_key("total_nodes"); w.write_int(static_cast<int64_t>(exportPoints.size()));
-    w.write_key("total_facets"); w.write_int(static_cast<int64_t>(exportFaces.size()));
-    w.write_key("boundary_facets"); w.write_int(boundaryFacets);
-    w.write_key("internal_facets"); w.write_int(internalFacets);
-
-    w.write_key("sub_listings");
-    w.write_map_header(2);
-    w.write_key("points");
-    w.write_array_header(static_cast<uint32_t>(exportPoints.size()));
+    // Pass 2: build JSON document and persist as Parquet payload.
+    json points = json::array();
     for(size_t i = 0; i < exportPoints.size(); ++i){
-        w.write_map_header(2);
-        w.write_key("index"); w.write_int(static_cast<int64_t>(i));
-        w.write_key("position"); w.write_array_header(3);
-        w.write_double(exportPoints[i].x()); w.write_double(exportPoints[i].y()); w.write_double(exportPoints[i].z());
+        points.push_back({
+            {"index", static_cast<int64_t>(i)},
+            {"position", {exportPoints[i].x(), exportPoints[i].y(), exportPoints[i].z()}}
+        });
     }
-    w.write_key("facets");
-    w.write_array_header(static_cast<uint32_t>(exportFaces.size()));
+    json facets = json::array();
     for(const auto& f : exportFaces){
-        w.write_map_header(1);
-        w.write_key("vertices"); w.write_array_header(3);
-        w.write_int(f.verts[0]); w.write_int(f.verts[1]); w.write_int(f.verts[2]);
+        facets.push_back({{"vertices", {f.verts[0], f.verts[1], f.verts[2]}}});
     }
 
-    w.write_key("export");
-    w.write_map_header(1);
-    w.write_key("MeshExporter");
-    w.write_map_header(2);
-    w.write_key("vertices");
-    w.write_array_header(static_cast<uint32_t>(exportPoints.size()));
-    for(size_t i = 0; i < exportPoints.size(); ++i){
-        w.write_map_header(2);
-        w.write_key("index"); w.write_int(static_cast<int64_t>(i));
-        w.write_key("position"); w.write_array_header(3);
-        w.write_double(exportPoints[i].x()); w.write_double(exportPoints[i].y()); w.write_double(exportPoints[i].z());
-    }
-    w.write_key("facets");
-    w.write_array_header(static_cast<uint32_t>(exportFaces.size()));
-    for(const auto& f : exportFaces){
-        w.write_map_header(1);
-        w.write_key("vertices"); w.write_array_header(3);
-        w.write_int(f.verts[0]); w.write_int(f.verts[1]); w.write_int(f.verts[2]);
-    }
-    of.flush();
+    json doc;
+    doc["main_listing"] = {
+        {"total_primary_tetrahedra", primaryTetrahedra},
+        {"total_nodes", static_cast<int64_t>(exportPoints.size())},
+        {"total_facets", static_cast<int64_t>(exportFaces.size())},
+        {"boundary_facets", boundaryFacets},
+        {"internal_facets", internalFacets}
+    };
+    doc["sub_listings"] = {{"points", points}, {"facets", facets}};
+    doc["export"]["MeshExporter"] = {{"vertices", points}, {"facets", facets}};
+
+    JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
 void streamCoherentCrystallineRegionsToFile(
@@ -310,24 +394,10 @@ void streamCoherentCrystallineRegionsToFile(
     const int assignedAtoms = static_cast<int>(context.atomCount()) - unassignedAtoms;
     const int baseAtomFields = 7; // id, pos, structure_id, structure_type, structure_name, cluster_id, topology_name (optional)
 
-    // Pass 2: stream
-    std::ofstream of(filePath, std::ios::binary);
-    MsgpackWriter w(of);
-
-    w.write_map_header(3);
-
-    w.write_key("main_listing");
-    w.write_map_header(5);
-    w.write_key("total_atoms"); w.write_int(static_cast<int64_t>(context.atomCount()));
-    w.write_key("coherent_region_count"); w.write_int(static_cast<int64_t>(atomIndicesByCluster.size()));
-    w.write_key("assigned_atoms"); w.write_int(assignedAtoms);
-    w.write_key("unassigned_atoms"); w.write_int(unassignedAtoms);
-    w.write_key("largest_region_size"); w.write_int(largestRegionSize);
-
-    w.write_key("sub_listings");
-    w.write_map_header(1);
-    w.write_key("coherent_crystalline_regions");
-    w.write_array_header(static_cast<uint32_t>(atomIndicesByCluster.size()));
+    // Pass 2: build JSON document and persist as Parquet payload.
+    (void)baseAtomFields;
+    json regions = json::array();
+    json atomisticExporter = json::object();
     for(const auto& [clusterId, atomIndices] : atomIndicesByCluster){
         const std::size_t rep = atomIndices.front();
         const int stype = context.structureTypes ? context.structureTypes->getInt(rep) : static_cast<int>(StructureType::OTHER);
@@ -335,41 +405,47 @@ void streamCoherentCrystallineRegionsToFile(
         const std::string topo = cluster && !cluster->topologyName.empty()
             ? cluster->topologyName : topologyNameForAtomExport(structureAnalysis, rep, stype);
         const std::string clusterName = "Cluster " + std::to_string(clusterId);
-        w.write_map_header(6);
-        w.write_key("cluster_id"); w.write_int(clusterId);
-        w.write_key("cluster_name"); w.write_str(clusterName);
-        w.write_key("atom_count"); w.write_int(static_cast<int64_t>(atomIndices.size()));
-        w.write_key("structure_id"); w.write_int(stype);
-        w.write_key("structure_name"); w.write_str(structureTypeNameForExport(stype));
-        w.write_key("topology_name"); w.write_str(topo);
+        regions.push_back({
+            {"cluster_id", clusterId},
+            {"cluster_name", clusterName},
+            {"atom_count", static_cast<int64_t>(atomIndices.size())},
+            {"structure_id", stype},
+            {"structure_name", structureTypeNameForExport(stype)},
+            {"topology_name", topo}
+        });
+
+        json atoms = json::array();
+        for(std::size_t atomIndex : atomIndices){
+            const int astype = context.structureTypes ? context.structureTypes->getInt(atomIndex) : static_cast<int>(StructureType::OTHER);
+            const int clustId = context.atomClusters ? context.atomClusters->getInt(atomIndex) : 0;
+            const std::string atopo = topologyNameForAtomExport(structureAnalysis, atomIndex, astype);
+            const auto& pos = atomIndex < frame.positions.size() ? frame.positions[atomIndex] : Point3::Origin();
+            json atom = {
+                {"id", atomIndex < frame.ids.size() ? frame.ids[atomIndex] : static_cast<int>(atomIndex)},
+                {"pos", {pos.x(), pos.y(), pos.z()}},
+                {"structure_id", astype},
+                {"structure_type", astype},
+                {"structure_name", structureTypeNameForExport(astype)},
+                {"cluster_id", clustId}
+            };
+            if(!atopo.empty()) atom["topology_name"] = atopo;
+            atoms.push_back(std::move(atom));
+        }
+        atomisticExporter[clusterName] = std::move(atoms);
     }
 
-    w.write_key("export");
-    w.write_map_header(1);
-    w.write_key("AtomisticExporter");
-    w.write_map_header(static_cast<uint32_t>(atomIndicesByCluster.size()));
-    for(const auto& [clusterId, atomIndices] : atomIndicesByCluster){
-        const std::string clusterName = "Cluster " + std::to_string(clusterId);
-        w.write_key(clusterName);
-        w.write_array_header(static_cast<uint32_t>(atomIndices.size()));
-        for(std::size_t atomIndex : atomIndices){
-            const int stype = context.structureTypes ? context.structureTypes->getInt(atomIndex) : static_cast<int>(StructureType::OTHER);
-            const int clustId = context.atomClusters ? context.atomClusters->getInt(atomIndex) : 0;
-            const std::string topo = topologyNameForAtomExport(structureAnalysis, atomIndex, stype);
-            const int nfields = topo.empty() ? (baseAtomFields - 1) : baseAtomFields;
-            w.write_map_header(static_cast<uint32_t>(nfields));
-            w.write_key("id"); w.write_int(atomIndex < frame.ids.size() ? frame.ids[atomIndex] : static_cast<int>(atomIndex));
-            w.write_key("pos"); w.write_array_header(3);
-            const auto& pos = atomIndex < frame.positions.size() ? frame.positions[atomIndex] : Point3::Origin();
-            w.write_double(pos.x()); w.write_double(pos.y()); w.write_double(pos.z());
-            w.write_key("structure_id"); w.write_int(stype);
-            w.write_key("structure_type"); w.write_int(stype);
-            w.write_key("structure_name"); w.write_str(structureTypeNameForExport(stype));
-            w.write_key("cluster_id"); w.write_int(clustId);
-            if(!topo.empty()){ w.write_key("topology_name"); w.write_str(topo); }
-        }
-    }
-    of.flush();
+    json doc;
+    doc["main_listing"] = {
+        {"total_atoms", static_cast<int64_t>(context.atomCount())},
+        {"coherent_region_count", static_cast<int64_t>(atomIndicesByCluster.size())},
+        {"assigned_atoms", assignedAtoms},
+        {"unassigned_atoms", unassignedAtoms},
+        {"largest_region_size", largestRegionSize}
+    };
+    doc["sub_listings"] = {{"coherent_crystalline_regions", regions}};
+    doc["export"]["AtomisticExporter"] = std::move(atomisticExporter);
+
+    JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
 json getNetworkStatistics(const DislocationNetwork* network, double cellVolume){
@@ -547,9 +623,6 @@ void streamDislocationsToFile(
     const SimulationCell* simulationCell,
     const DislocationsExportOptions& options
 ){
-    std::ofstream of(filePath, std::ios::binary);
-    MsgpackWriter w(of);
-
     const auto& segments = network->segments();
     std::vector<const DislocationSegment*> validSegments;
     validSegments.reserve(segments.size());
@@ -566,6 +639,8 @@ void streamDislocationsToFile(
         double magnitude;
         int clusterId = 0;
         std::string crystalStructure;
+        std::string burgersFamily;
+        std::string burgersFamilyLabel;
     };
     std::vector<Chunk> chunks;
     chunks.reserve(validSegments.size() * 2);
@@ -594,13 +669,21 @@ void streamDislocationsToFile(
                     ? chunkCluster->topologyName
                     : structureTypeNameForExport(chunkCluster->structure))
                 : std::string();
+            const BurgersFamilyMatch family = classifyBurgersFamily(c.burgersLocal, c.crystalStructure);
+            c.burgersFamily = family.name;
+            c.burgersFamilyLabel = family.label;
+            // Unclassified vectors keep the numeric label so distinct "Other"
+            // vectors stay distinguishable in the charts.
+            const std::string summaryKey = c.burgersFamily != "Other"
+                ? c.burgersFamilyLabel
+                : burgersVectorLabel(c.burgersLocal);
             chunks.push_back(std::move(c));
 
             totalLength += len;
             totalPoints += pts.size();
             maxLength = std::max(maxLength, len);
             minLength = std::min(minLength, len);
-            auto& s = burgersSummary[burgersVectorLabel(c.burgersLocal)];
+            auto& s = burgersSummary[summaryKey];
             s.first++; s.second += len;
         };
 
@@ -623,131 +706,79 @@ void streamDislocationsToFile(
     }
     if(chunks.empty()) minLength = 0;
 
-    // Write msgpack structure directly
-    // Root: map with 3 keys: "export", "main_listing", "sub_listings"
-    w.write_map_header(3);
+    // Build JSON document and persist as Parquet payload.
+    auto vec3 = [](const Vector3& v){ return json::array({v.x(), v.y(), v.z()}); };
+    auto pt3 = [](const Point3& p){ return json::array({p.x(), p.y(), p.z()}); };
 
-    // "export"
-    w.write_key("export");
-    w.write_map_header(2);
-    {
-        // "DislocationExporter"
-        w.write_key("DislocationExporter");
-        w.write_map_header(1);
-        w.write_key("segments");
-        w.write_array_header(static_cast<uint32_t>(chunks.size()));
-        for(size_t i = 0; i < chunks.size(); ++i){
-            const auto& c = chunks[i];
-            w.write_map_header(8);
-            w.write_key("segment_id"); w.write_int(static_cast<int64_t>(i));
-            w.write_key("points");
-            w.write_array_header(static_cast<uint32_t>(c.points.size()));
-            for(const auto& p : c.points){
-                w.write_array_header(3);
-                w.write_double(p.x()); w.write_double(p.y()); w.write_double(p.z());
-            }
-            w.write_key("length"); w.write_double(c.length);
-            w.write_key("num_points"); w.write_int(static_cast<int64_t>(c.points.size()));
-            w.write_key("burgers_vector");
-            w.write_array_header(3);
-            w.write_double(c.burgersLocal.x()); w.write_double(c.burgersLocal.y()); w.write_double(c.burgersLocal.z());
-            w.write_key("burgers_vector_local");
-            w.write_array_header(3);
-            w.write_double(c.burgersLocal.x()); w.write_double(c.burgersLocal.y()); w.write_double(c.burgersLocal.z());
-            w.write_key("burgers_vector_global");
-            w.write_array_header(3);
-            w.write_double(c.burgersGlobal.x()); w.write_double(c.burgersGlobal.y()); w.write_double(c.burgersGlobal.z());
-            w.write_key("magnitude"); w.write_double(c.magnitude);
-        }
+    json exporterSegments = json::array();
+    json segmentListing = json::array();
+    for(size_t i = 0; i < chunks.size(); ++i){
+        const auto& c = chunks[i];
+        json pts = json::array();
+        for(const auto& p : c.points) pts.push_back(pt3(p));
+        exporterSegments.push_back({
+            {"segment_id", static_cast<int64_t>(i)},
+            {"points", pts},
+            {"length", c.length},
+            {"num_points", static_cast<int64_t>(c.points.size())},
+            {"burgers_vector", vec3(c.burgersLocal)},
+            {"burgers_vector_local", vec3(c.burgersLocal)},
+            {"burgers_vector_global", vec3(c.burgersGlobal)},
+            {"magnitude", c.magnitude},
+            {"crystal_structure", c.crystalStructure},
+            {"burgers_family", c.burgersFamily},
+            {"burgers_family_label", c.burgersFamilyLabel}
+        });
 
-        // "ChartExporter"
-        w.write_key("ChartExporter");
-        w.write_map_header(2);
-        w.write_key("burgers_counts");
-        w.write_map_header(2);
-        w.write_key("burgers_vector");
-        w.write_array_header(static_cast<uint32_t>(burgersSummary.size()));
-        for(const auto& [label, _] : burgersSummary) w.write_str(label);
-        w.write_key("segment_count");
-        w.write_array_header(static_cast<uint32_t>(burgersSummary.size()));
-        for(const auto& [_, s] : burgersSummary) w.write_int(s.first);
-        w.write_key("burgers_lengths");
-        w.write_map_header(2);
-        w.write_key("burgers_vector");
-        w.write_array_header(static_cast<uint32_t>(burgersSummary.size()));
-        for(const auto& [label, _] : burgersSummary) w.write_str(label);
-        w.write_key("total_length");
-        w.write_array_header(static_cast<uint32_t>(burgersSummary.size()));
-        for(const auto& [_, s] : burgersSummary) w.write_double(s.second);
+        const Point3 head = c.points.empty() ? Point3::Origin() : c.points.front();
+        const Point3 tail = c.points.empty() ? Point3::Origin() : c.points.back();
+        segmentListing.push_back({
+            {"segment_id", static_cast<int64_t>(i)},
+            {"burgers_vector", vec3(c.burgersLocal)},
+            {"spatial_burgers_vector", vec3(c.burgersGlobal)},
+            {"burgers_family", c.burgersFamily},
+            {"length", c.length},
+            {"cluster", c.clusterId},
+            {"crystal_structure", c.crystalStructure},
+            {"head_vertex", pt3(head)},
+            {"tail_vertex", pt3(tail)}
+        });
     }
 
-    // "main_listing"
-    w.write_key("main_listing");
-    w.write_map_header(6);
-    w.write_key("dislocations"); w.write_int(static_cast<int64_t>(chunks.size()));
-    w.write_key("total_points"); w.write_int(static_cast<int64_t>(totalPoints));
-    w.write_key("average_segment_length"); w.write_double(chunks.empty() ? 0.0 : totalLength / chunks.size());
-    w.write_key("max_segment_length"); w.write_double(maxLength);
-    w.write_key("min_segment_length"); w.write_double(minLength);
-    w.write_key("total_length"); w.write_double(totalLength);
-
-    // "sub_listings": per-segment table plus circuit / network / junction tables.
-    // The per-segment listing ("dislocation_segments") reuses the already-computed
-    // chunks; the others reuse the analyzers via the json->msgpack bridge.
-    {
-        const double cellVolume = simulationCell ? simulationCell->volume3D() : 0.0;
-        const int subListingCount =
-            1 // dislocation_segments (always emitted)
-            + (options.exportDislocationNetworkStats ? 1 : 0)
-            + (options.exportCircuitInformation ? 1 : 0)
-            + (options.exportJunctions ? 1 : 0);
-
-        w.write_key("sub_listings");
-        w.write_map_header(static_cast<uint32_t>(subListingCount));
-
-        // Per-segment listing (post-PBC pieces, matching the rendered polylines).
-        // segment_id lines up 1:1 with the DislocationExporter segment ids.
-        w.write_key("dislocation_segments");
-        w.write_array_header(static_cast<uint32_t>(chunks.size()));
-        for(size_t i = 0; i < chunks.size(); ++i){
-            const auto& c = chunks[i];
-            const Point3 head = c.points.empty() ? Point3::Origin() : c.points.front();
-            const Point3 tail = c.points.empty() ? Point3::Origin() : c.points.back();
-
-            w.write_map_header(8);
-            w.write_key("segment_id"); w.write_int(static_cast<int64_t>(i));
-            w.write_key("burgers_vector");
-            w.write_array_header(3);
-            w.write_double(c.burgersLocal.x()); w.write_double(c.burgersLocal.y()); w.write_double(c.burgersLocal.z());
-            w.write_key("spatial_burgers_vector");
-            w.write_array_header(3);
-            w.write_double(c.burgersGlobal.x()); w.write_double(c.burgersGlobal.y()); w.write_double(c.burgersGlobal.z());
-            w.write_key("length"); w.write_double(c.length);
-            w.write_key("cluster"); w.write_int(c.clusterId);
-            w.write_key("crystal_structure"); w.write_str(c.crystalStructure);
-            w.write_key("head_vertex");
-            w.write_array_header(3);
-            w.write_double(head.x()); w.write_double(head.y()); w.write_double(head.z());
-            w.write_key("tail_vertex");
-            w.write_array_header(3);
-            w.write_double(tail.x()); w.write_double(tail.y()); w.write_double(tail.z());
-        }
-
-        if(options.exportDislocationNetworkStats){
-            w.write_key("network_statistics");
-            JsonUtils::writeJsonAsMsgpack(w, getNetworkStatistics(network, cellVolume), false);
-        }
-        if(options.exportCircuitInformation){
-            w.write_key("circuit_information");
-            JsonUtils::writeJsonAsMsgpack(w, getCircuitInformation(network), false);
-        }
-        if(options.exportJunctions){
-            w.write_key("junction_information");
-            JsonUtils::writeJsonAsMsgpack(w, getJunctionInformation(network), false);
-        }
+    json burgersLabels = json::array(), segmentCounts = json::array(), burgersLengths = json::array();
+    for(const auto& [label, s] : burgersSummary){
+        burgersLabels.push_back(label);
+        segmentCounts.push_back(s.first);
+        burgersLengths.push_back(s.second);
     }
 
-    of.flush();
+    json doc;
+    doc["export"]["DislocationExporter"] = {{"segments", exporterSegments}};
+    doc["export"]["ChartExporter"] = {
+        {"burgers_counts", {{"burgers_vector", burgersLabels}, {"segment_count", segmentCounts}}},
+        {"burgers_lengths", {{"burgers_vector", burgersLabels}, {"total_length", burgersLengths}}}
+    };
+    doc["main_listing"] = {
+        {"dislocations", static_cast<int64_t>(chunks.size())},
+        {"total_points", static_cast<int64_t>(totalPoints)},
+        {"average_segment_length", chunks.empty() ? 0.0 : totalLength / chunks.size()},
+        {"max_segment_length", maxLength},
+        {"min_segment_length", minLength},
+        {"total_length", totalLength}
+    };
+
+    json subListings;
+    subListings["dislocation_segments"] = segmentListing;
+    const double cellVolume = simulationCell ? simulationCell->volume3D() : 0.0;
+    if(options.exportDislocationNetworkStats)
+        subListings["network_statistics"] = getNetworkStatistics(network, cellVolume);
+    if(options.exportCircuitInformation)
+        subListings["circuit_information"] = getCircuitInformation(network);
+    if(options.exportJunctions)
+        subListings["junction_information"] = getJunctionInformation(network);
+    doc["sub_listings"] = std::move(subListings);
+
+    JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
 void streamDefectMeshToFile(
@@ -756,9 +787,6 @@ void streamDefectMeshToFile(
     const StructureAnalysis& structureAnalysis,
     bool includeTopologyInfo
 ){
-    std::ofstream of(filePath, std::ios::binary);
-    MsgpackWriter w(of);
-
     const auto& originalVertices = interfaceMesh.vertices();
     const auto& originalFaces = interfaceMesh.faces();
     const auto& cell = structureAnalysis.context().simCell;
@@ -799,67 +827,28 @@ void streamDefectMeshToFile(
         exportFaces.push_back(newFaceVerts);
     }
 
-    // Write msgpack
-    int numKeys = includeTopologyInfo ? 4 : 3;
-    w.write_map_header(numKeys);
-
-    // "main_listing"
-    w.write_key("main_listing");
-    w.write_map_header(2);
-    w.write_key("total_nodes"); w.write_int(static_cast<int64_t>(exportPoints.size()));
-    w.write_key("total_facets"); w.write_int(static_cast<int64_t>(exportFaces.size()));
-
-    // "sub_listings"
-    w.write_key("sub_listings");
-    w.write_map_header(2);
-    w.write_key("points");
-    w.write_array_header(static_cast<uint32_t>(exportPoints.size()));
+    // Build JSON document and persist as Parquet payload.
+    json points = json::array();
     for(size_t i = 0; i < exportPoints.size(); ++i){
-        w.write_map_header(2);
-        w.write_key("index"); w.write_int(static_cast<int64_t>(i));
-        w.write_key("position");
-        w.write_array_header(3);
-        w.write_double(exportPoints[i].x());
-        w.write_double(exportPoints[i].y());
-        w.write_double(exportPoints[i].z());
+        points.push_back({
+            {"index", static_cast<int64_t>(i)},
+            {"position", {exportPoints[i].x(), exportPoints[i].y(), exportPoints[i].z()}}
+        });
     }
-    w.write_key("facets");
-    w.write_array_header(static_cast<uint32_t>(exportFaces.size()));
+    json facets = json::array();
     for(const auto& f : exportFaces){
-        w.write_map_header(1);
-        w.write_key("vertices");
-        w.write_array_header(3);
-        w.write_int(f[0]); w.write_int(f[1]); w.write_int(f[2]);
+        facets.push_back({{"vertices", {f[0], f[1], f[2]}}});
     }
 
-    // "export"
-    w.write_key("export");
-    w.write_map_header(1);
-    w.write_key("MeshExporter");
-    w.write_map_header(2);
-    w.write_key("vertices");
-    w.write_array_header(static_cast<uint32_t>(exportPoints.size()));
-    for(size_t i = 0; i < exportPoints.size(); ++i){
-        w.write_map_header(2);
-        w.write_key("index"); w.write_int(static_cast<int64_t>(i));
-        w.write_key("position");
-        w.write_array_header(3);
-        w.write_double(exportPoints[i].x());
-        w.write_double(exportPoints[i].y());
-        w.write_double(exportPoints[i].z());
-    }
-    w.write_key("facets");
-    w.write_array_header(static_cast<uint32_t>(exportFaces.size()));
-    for(const auto& f : exportFaces){
-        w.write_map_header(1);
-        w.write_key("vertices");
-        w.write_array_header(3);
-        w.write_int(f[0]); w.write_int(f[1]); w.write_int(f[2]);
-    }
+    json doc;
+    doc["main_listing"] = {
+        {"total_nodes", static_cast<int64_t>(exportPoints.size())},
+        {"total_facets", static_cast<int64_t>(exportFaces.size())}
+    };
+    doc["sub_listings"] = {{"points", points}, {"facets", facets}};
+    doc["export"]["MeshExporter"] = {{"vertices", points}, {"facets", facets}};
 
     if(includeTopologyInfo){
-        w.write_key("topology");
-        w.write_map_header(3);
         std::unordered_set<uint64_t> edgeSet;
         edgeSet.reserve(originalFaces.size() * 3);
         for(const auto* face : originalFaces){
@@ -872,13 +861,14 @@ void streamDefectMeshToFile(
                 edge = edge->nextFaceEdge();
             }while(edge != face->edges());
         }
-        w.write_key("euler_characteristic");
-        w.write_int(static_cast<int64_t>(originalVertices.size()) - static_cast<int64_t>(edgeSet.size()) + static_cast<int64_t>(originalFaces.size()));
-        w.write_key("is_completely_good"); w.write_bool(interfaceMesh.isCompletelyGood());
-        w.write_key("is_completely_bad"); w.write_bool(interfaceMesh.isCompletelyBad());
+        doc["topology"] = {
+            {"euler_characteristic", static_cast<int64_t>(originalVertices.size()) - static_cast<int64_t>(edgeSet.size()) + static_cast<int64_t>(originalFaces.size())},
+            {"is_completely_good", interfaceMesh.isCompletelyGood()},
+            {"is_completely_bad", interfaceMesh.isCompletelyBad()}
+        };
     }
 
-    of.flush();
+    JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
 }

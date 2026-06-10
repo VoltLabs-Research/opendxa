@@ -122,7 +122,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         if(_exportDefectMesh){
             spdlog::info("Writing defect mesh data");
             DxaSerialization::streamDefectMeshToFile(
-                outputFile + "_defect_mesh.msgpack",
+                outputFile + "_defect_mesh.parquet",
                 interfaceMesh,
                 interfaceMesh.structureAnalysis(),
                 true
@@ -138,7 +138,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 _exportJunctions
             };
             DxaSerialization::streamDislocationsToFile(
-                outputFile + "_dislocations.msgpack",
+                outputFile + "_dislocations.parquet",
                 &network,
                 &frame.simulationCell,
                 exportOptions
@@ -148,7 +148,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         if(_exportInterfaceMesh){
             spdlog::info("Writing mesh data");
             DxaSerialization::streamDefectMeshToFile(
-                outputFile + "_interface_mesh.msgpack",
+                outputFile + "_interface_mesh.parquet",
                 interfaceMesh,
                 interfaceMesh.structureAnalysis(),
                 true
@@ -158,21 +158,21 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         if(_exportDelaunayTessellation){
             spdlog::info("Writing Delaunay tessellation data");
             DxaSerialization::streamDelaunayTessellationToFile(
-                outputFile + "_delaunay_tessellation.msgpack", tessellation
+                outputFile + "_delaunay_tessellation.parquet", tessellation
             );
         }
 
         if(_exportStructureIdentification){
             spdlog::info("Writing structure identification data");
-            StructureIdentificationExport::streamStructureIdentificationToFile(
-                outputFile + "_atoms.msgpack", frame, *structureAnalysis
+            StructureIdentificationExport::streamStructureIdentificationToParquet(
+                outputFile + "_atoms.parquet", frame, *structureAnalysis
             );
         }
 
         if(_exportCoherentCrystallineRegions){
             spdlog::info("Writing coherent crystalline region data");
             DxaSerialization::streamCoherentCrystallineRegionsToFile(
-                outputFile + "_coherent_crystalline_regions.msgpack", frame, *structureAnalysis
+                outputFile + "_coherent_crystalline_regions.parquet", frame, *structureAnalysis
             );
         }
     }
