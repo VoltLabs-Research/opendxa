@@ -14,6 +14,7 @@
 #include <set>
 #include <string>
 #include <volt/utilities/json_utils.h>
+#include <volt/utilities/parquet_line_writer.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
 #include <fstream>
@@ -617,8 +618,14 @@ int countDanglingSegments(const DislocationNetwork* network){
 
 // ============ STREAMING EXPORT ============
 
+BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure){
+    const BurgersFamilyMatch match = Detail::classifyBurgersFamily(localBurgers, crystalStructure);
+    return BurgersFamily{match.name, match.label};
+}
+
 void streamDislocationsToFile(
-    const std::string& filePath,
+    const std::string& linesFilePath,
+    const std::string& summaryFilePath,
     const DislocationNetwork* network,
     const SimulationCell* simulationCell,
     const DislocationsExportOptions& options
@@ -669,7 +676,7 @@ void streamDislocationsToFile(
                     ? chunkCluster->topologyName
                     : structureTypeNameForExport(chunkCluster->structure))
                 : std::string();
-            const BurgersFamilyMatch family = classifyBurgersFamily(c.burgersLocal, c.crystalStructure);
+            const BurgersFamilyMatch family = Detail::classifyBurgersFamily(c.burgersLocal, c.crystalStructure);
             c.burgersFamily = family.name;
             c.burgersFamilyLabel = family.label;
             // Unclassified vectors keep the numeric label so distinct "Other"
@@ -706,45 +713,33 @@ void streamDislocationsToFile(
     }
     if(chunks.empty()) minLength = 0;
 
-    // Build JSON document and persist as Parquet payload.
-    auto vec3 = [](const Vector3& v){ return json::array({v.x(), v.y(), v.z()}); };
-    auto pt3 = [](const Point3& p){ return json::array({p.x(), p.y(), p.z()}); };
+    // One row per segment in the standard line entity table (id, points,
+    // per-segment property columns). VOLT discovers, queries and styles these
+    // properties generically — no dislocation knowledge outside this plugin.
+    auto vecAsList = [](const Vector3& v){ return std::vector<double>{v.x(), v.y(), v.z()}; };
+    auto pointAsList = [](const Point3& p){ return std::vector<double>{p.x(), p.y(), p.z()}; };
+    streamLinesToParquet(
+        linesFilePath,
+        chunks.size(),
+        [&](std::size_t i, std::vector<Point3>& outPoints){ outPoints = chunks[i].points; },
+        [&](ColumnarLineWriter& writer, std::size_t i){
+            const auto& c = chunks[i];
+            writer.field("length", c.length);
+            writer.field("num_points", static_cast<std::int64_t>(c.points.size()));
+            writer.field("magnitude", c.magnitude);
+            writer.field("burgers_vector_local", vecAsList(c.burgersLocal));
+            writer.field("burgers_vector_global", vecAsList(c.burgersGlobal));
+            writer.field("crystal_structure", c.crystalStructure);
+            writer.field("burgers_family", c.burgersFamily);
+            writer.field("burgers_family_label", c.burgersFamilyLabel);
+            writer.field("cluster_id", static_cast<std::int64_t>(c.clusterId));
+            writer.field("head_vertex", pointAsList(c.points.empty() ? Point3::Origin() : c.points.front()));
+            writer.field("tail_vertex", pointAsList(c.points.empty() ? Point3::Origin() : c.points.back()));
+        }
+    );
 
-    json exporterSegments = json::array();
-    json segmentListing = json::array();
-    for(size_t i = 0; i < chunks.size(); ++i){
-        const auto& c = chunks[i];
-        json pts = json::array();
-        for(const auto& p : c.points) pts.push_back(pt3(p));
-        exporterSegments.push_back({
-            {"segment_id", static_cast<int64_t>(i)},
-            {"points", pts},
-            {"length", c.length},
-            {"num_points", static_cast<int64_t>(c.points.size())},
-            {"burgers_vector", vec3(c.burgersLocal)},
-            {"burgers_vector_local", vec3(c.burgersLocal)},
-            {"burgers_vector_global", vec3(c.burgersGlobal)},
-            {"magnitude", c.magnitude},
-            {"crystal_structure", c.crystalStructure},
-            {"burgers_family", c.burgersFamily},
-            {"burgers_family_label", c.burgersFamilyLabel}
-        });
-
-        const Point3 head = c.points.empty() ? Point3::Origin() : c.points.front();
-        const Point3 tail = c.points.empty() ? Point3::Origin() : c.points.back();
-        segmentListing.push_back({
-            {"segment_id", static_cast<int64_t>(i)},
-            {"burgers_vector", vec3(c.burgersLocal)},
-            {"spatial_burgers_vector", vec3(c.burgersGlobal)},
-            {"burgers_family", c.burgersFamily},
-            {"length", c.length},
-            {"cluster", c.clusterId},
-            {"crystal_structure", c.crystalStructure},
-            {"head_vertex", pt3(head)},
-            {"tail_vertex", pt3(tail)}
-        });
-    }
-
+    // Network-level statistics and chart data ride a separate JSON-payload
+    // summary file; they are plugin-specific aggregates, not line entities.
     json burgersLabels = json::array(), segmentCounts = json::array(), burgersLengths = json::array();
     for(const auto& [label, s] : burgersSummary){
         burgersLabels.push_back(label);
@@ -753,7 +748,6 @@ void streamDislocationsToFile(
     }
 
     json doc;
-    doc["export"]["DislocationExporter"] = {{"segments", exporterSegments}};
     doc["export"]["ChartExporter"] = {
         {"burgers_counts", {{"burgers_vector", burgersLabels}, {"segment_count", segmentCounts}}},
         {"burgers_lengths", {{"burgers_vector", burgersLabels}, {"total_length", burgersLengths}}}
@@ -768,7 +762,6 @@ void streamDislocationsToFile(
     };
 
     json subListings;
-    subListings["dislocation_segments"] = segmentListing;
     const double cellVolume = simulationCell ? simulationCell->volume3D() : 0.0;
     if(options.exportDislocationNetworkStats)
         subListings["network_statistics"] = getNetworkStatistics(network, cellVolume);
@@ -778,7 +771,7 @@ void streamDislocationsToFile(
         subListings["junction_information"] = getJunctionInformation(network);
     doc["sub_listings"] = std::move(subListings);
 
-    JsonUtils::writeJsonToParquet(doc, filePath);
+    JsonUtils::writeJsonToParquet(doc, summaryFilePath);
 }
 
 void streamDefectMeshToFile(

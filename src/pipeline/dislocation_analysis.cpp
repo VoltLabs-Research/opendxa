@@ -139,6 +139,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             };
             DxaSerialization::streamDislocationsToFile(
                 outputFile + "_dislocations.parquet",
+                outputFile + "_dislocation_summary.parquet",
                 &network,
                 &frame.simulationCell,
                 exportOptions
