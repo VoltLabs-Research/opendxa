@@ -99,6 +99,34 @@ public:
         _coverDomainWithFiniteTets = coverDomainWithFiniteTets;
     }
 
+    // Affine metric pre-conditioning (isotropization).
+    // For strongly ansiotropic crystals (a != b != c), the Delaunay tessellation
+    // of the physical point cloud becomes degenerate along the long axis, so no
+    // Burgers circuit can close. Setting a per-axis rescale (sa, sb, sc) makes DXA build
+    // the tessellation in an isotropized frame (positions / s) where the lattice is
+    // (near-)cubic; the ideal lattice vectors that determine the Burgers vector are
+    // untouched, so b = sum(deltaX) comes out correct in lattice units. 
+    // Exported line geometry is rescale back to physical coordiantes by (sa, sb, sc).
+    void setMetricRescale(double sa, double sb, double sc){
+        _metricRescaleX = sa;
+        _metricRescaleY = sb;
+        _metricRescaleZ = sc;
+    }
+
+    // Build the elastic mapping from a perfect reference crystal
+    // instead of upstream cluster tables.
+    void setReferenceCrystal(std::string path){
+        _referenceCrystal = std::move(path);
+    }
+
+    void setCationSpecies(int species){
+        _cationSpecies = species;
+    }
+
+    void setFullCrystalCutoff(double cutoff){
+        _fullCrystalCutoff = cutoff;
+    }
+
 private:
     std::string _referenceTopologyName;
 
@@ -109,6 +137,10 @@ private:
     double _ghostLayerScale;
     double _interfaceAlphaScale;
     int _crystalPathSteps;
+
+    double _metricRescaleX = 1.0;
+    double _metricRescaleY = 1.0;
+    double _metricRescaleZ = 1.0;
 
     bool _exportDefectMesh;
     bool _exportInterfaceMesh;
@@ -124,6 +156,13 @@ private:
 
     std::string _clustersTablePath;
     std::string _clusterTransitionsPath;
+
+    // Full crystal (reference-driven) mode.
+    std::string _referenceCrystal;
+    int _cationSpecies = 1;
+
+    // 0 = auto-select cutoff
+    double _fullCrystalCutoff = 0.0;  
 };
 
 }
