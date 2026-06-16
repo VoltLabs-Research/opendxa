@@ -2,11 +2,7 @@
 #include <volt/pipeline/dislocation_analysis.h>
 #include <volt/structures/crystal_topology_registry.h>
 
-#include <yaml-cpp/yaml.h>
-
 #include <array>
-#include <filesystem>
-#include <optional>
 #include <string>
 
 using namespace Volt;
@@ -39,19 +35,19 @@ static const std::vector<OptionBinding<S>> bindings = {
 
 static PluginDescriptor buildDescriptor() {
     auto meta = optionsMeta(bindings);
-    meta.insert(meta.begin(), {"--lattice_dir", "path", "Directory containing lattice/structure YAMLs", ""});
+    meta.insert(meta.begin(), {"--lattice_dir", "path", "Directory containing reference lattice/topology YAMLs", ""});
     meta.insert(meta.begin() + 1, {"--reference_topology", "string",
-        "Name of the reference structure YAML (in --lattice_dir). A standard topology YAML "
-        "(coordination_number + neighbor_vectors) selects classic mode (consumes --clusters_table). "
-        "An exotic YAML carrying 'cation_species' + 'reference_crystal' selects full-crystal mode: "
-        "OpenDXA builds its own elastic mapping (neighbour graph + ideal vectors + single grain "
-        "cluster) from the perfect reference, with auto-selected cutoff and auto metric isotropization. "
-        "[required]", ""});
+        "Reference structure name the Burgers vectors are expressed in. OpenDXA consumes the "
+        "contract (--clusters_table + --clusters_transitions + --neighbor_lattice) produced by an "
+        "upstream structure-identification step (e.g. PolyhedralTemplateMatching, "
+        "PatternStructureMatching or ReferenceCrystalMatching). If the name matches a known topology "
+        "YAML in --lattice_dir it is canonicalized; otherwise the contract-supplied name is used "
+        "as-is. [required]", ""});
     meta.insert(meta.begin() + 2, {"--metric_rescale", "sx,sy,sz",
-        "Classic-mode only: affine metric isotropization factors for anisotropic crystals. "
-        "DXA runs in a frame with coords/(sx,sy,sz); Burgers vector comes out in lattice units "
-        "(multiply components by sx,sy,sz for Angstrom). Full-crystal mode auto-derives these from "
-        "the reference cell. Default: off (1,1,1).", ""});
+        "Affine metric isotropization factors for anisotropic crystals. DXA runs in a frame with "
+        "coords/(sx,sy,sz); ideal vectors are rescaled to match, and the Burgers vector comes out in "
+        "lattice units (multiply components by sx,sy,sz for Angstrom). For reference-built contracts, "
+        "use the factors reported by the ReferenceCrystalMatching producer. Default: off (1,1,1).", ""});
     return {"volt-dxa", "Full Dislocation Analysis", std::move(meta)};
 }
 
@@ -86,66 +82,6 @@ static bool parseMetricRescale(const std::string& raw, double& rescaleX, double&
     return true;
 }
 
-struct ExoticStructure{
-    std::string referenceCrystal;
-    int cationSpecies = 0;
-    double fullCrystalCutoff = 0.0;
-};
-
-static std::optional<ExoticStructure> tryLoadExoticStructure(
-    const std::string& latticeDir, const std::string& name)
-{
-    if(latticeDir.empty()){
-        return std::nullopt;
-    }
-
-    namespace fs = std::filesystem;
-    fs::path yamlPath;
-    for(const char* extension : {".yml", ".yaml"}){
-        const fs::path candidate = fs::path(latticeDir) / (name + extension);
-        std::error_code errorCode;
-        if(fs::exists(candidate, errorCode)){
-            yamlPath = candidate;
-            break;
-        }
-    }
-    if(yamlPath.empty()){
-        return std::nullopt;
-    }
-
-    YAML::Node document;
-    try{
-        document = YAML::LoadFile(yamlPath.string());
-    }catch(const std::exception&){
-        return std::nullopt;
-    }
-
-    if(!document || !document.IsMap() || !document["cation_species"]){
-        return std::nullopt;
-    }
-
-    ExoticStructure exotic;
-    exotic.cationSpecies = document["cation_species"].as<int>();
-    if(!document["reference_crystal"]){
-        throw std::runtime_error("Exotic structure '" + name + "' has cation_species but no reference_crystal");
-    }
-
-    fs::path referencePath(document["reference_crystal"].as<std::string>());
-    if(referencePath.is_relative()){
-        referencePath = yamlPath.parent_path() / referencePath;
-    }
-    std::error_code errorCode;
-    if(!fs::exists(referencePath, errorCode)){
-        throw std::runtime_error("Exotic structure '" + name + "': reference_crystal not found at '" + referencePath.string() + "'");
-    }
-    exotic.referenceCrystal = referencePath.string();
-
-    if(document["full_crystal_cutoff"]){
-        exotic.fullCrystalCutoff = document["full_crystal_cutoff"].as<double>();
-    }
-    return exotic;
-}
-
 VOLT_PLUGIN_MAIN(buildDescriptor(),
     [](const OptsMap& opts, const LammpsParser::Frame& frame,
        const LammpsParser::Frame*, const std::string& outputBase) -> json {
@@ -163,34 +99,30 @@ VOLT_PLUGIN_MAIN(buildDescriptor(),
     S analyzer;
     applyAll(analyzer, bindings, opts);
 
-    std::optional<ExoticStructure> exotic;
+    // OpenDXA is a pure consumer of the structure-identification contract
+    // (--clusters_table + --clusters_transitions + --neighbor_lattice + the
+    // annotated dump). The reference topology name is only used to re-express the
+    // Burgers vector (a string match against the contract's topology_name). If it
+    // matches a known topology YAML, canonicalize the name; otherwise (or if no
+    // topology registry is configured) use the contract-supplied name as-is.
+    std::string resolvedTopology = referenceName;
     try{
-        exotic = tryLoadExoticStructure(latticeDir, referenceName);
-    }catch(const std::exception& e){
-        return AnalysisResult::failure(std::string("Reference structure: ") + e.what());
+        if(const auto* topology = crystalTopologyByName(referenceName)){
+            resolvedTopology = topology->name;
+        }
+    }catch(const std::exception&){
+        // No topology search root / empty registry: the producer-supplied name
+        // already matches the contract, so fall through with it unchanged.
     }
+    analyzer.setReferenceTopology(resolvedTopology);
 
-    if(exotic){
-        analyzer.setReferenceTopology(referenceName);
-        analyzer.setReferenceCrystal(exotic->referenceCrystal);
-        analyzer.setCationSpecies(exotic->cationSpecies);
-        analyzer.setFullCrystalCutoff(exotic->fullCrystalCutoff);
-    }else{
-        const auto* topology = crystalTopologyByName(referenceName);
-        if(!topology){
-            return AnalysisResult::failure("Unknown --reference_topology '" + referenceName +
-                "' (not a known topology, and no exotic YAML with cation_species found in --lattice_dir)");
+    const auto metricRescaleRaw = CLI::getString(opts, "--metric_rescale", "");
+    if(!metricRescaleRaw.empty()){
+        double rescaleX = 1.0, rescaleY = 1.0, rescaleZ = 1.0;
+        if(!parseMetricRescale(metricRescaleRaw, rescaleX, rescaleY, rescaleZ)){
+            return AnalysisResult::failure("Malformed --metric_rescale (expected positive sx,sy,sz)");
         }
-        analyzer.setReferenceTopology(topology->name);
-
-        const auto metricRescaleRaw = CLI::getString(opts, "--metric_rescale", "");
-        if(!metricRescaleRaw.empty()){
-            double rescaleX = 1.0, rescaleY = 1.0, rescaleZ = 1.0;
-            if(!parseMetricRescale(metricRescaleRaw, rescaleX, rescaleY, rescaleZ)){
-                return AnalysisResult::failure("Malformed --metric_rescale (expected positive sx,sy,sz)");
-            }
-            analyzer.setMetricRescale(rescaleX, rescaleY, rescaleZ);
-        }
+        analyzer.setMetricRescale(rescaleX, rescaleY, rescaleZ);
     }
 
     try{
