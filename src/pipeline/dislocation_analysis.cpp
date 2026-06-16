@@ -3,12 +3,12 @@
 #include <volt/analysis/structure_analysis.h>
 #include <volt/core/frame_adapter.h>
 #include <volt/core/reconstructed_structure.h>
+#include <volt/analysis/cluster_graph_io.h>
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/pipeline/delaunay_tessellation.h>
 #include <volt/pipeline/elastic_mapping.h>
 #include <volt/pipeline/interface_mesh.h>
 #include <volt/helpers/dxa_serialization.h>
-#include <volt/helpers/full_crystal_context.h>
 #include <volt/analysis/structure_identification_export.h>
 
 #include <spdlog/spdlog.h>
@@ -60,11 +60,10 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         throw std::runtime_error(frameError);
     }
 
-    const bool fullCrystalMode = !_referenceCrystal.empty();
-    if(!fullCrystalMode && (_clustersTablePath.empty() || _clusterTransitionsPath.empty())){
+    if(_clustersTablePath.empty() || _clusterTransitionsPath.empty()){
         throw std::runtime_error("OpenDXA requires --clusters_table and --clusters_transitions for reconstruct Cluster Graph");
     }
-    if(!fullCrystalMode && _neighborLatticePath.empty()){
+    if(_neighborLatticePath.empty()){
         throw std::runtime_error("OpenDXA requires --neighbor_lattice (per-atom neighbor topology parquet) for reconstruct Cluster Graph");
     }
 
@@ -73,36 +72,11 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     SimulationCell analysisCell = frame.simulationCell;
     ReconstructedStructureContext context(positions.get(), analysisCell);
     auto structureAnalysis = std::make_unique<StructureAnalysis>(context);
-    
-    const bool metricRescaleActive = 
+
+    const bool metricRescaleActive =
             std::abs(_metricRescaleX - 1.0) > 1e-12 ||
             std::abs(_metricRescaleY - 1.0) > 1e-12 ||
             std::abs(_metricRescaleZ - 1.0) > 1e-12;
-
-    // Full-crystal mode => build the elastic-mapping input from the perfect reference
-    // (physical frame; the grain-frame ICP needs physical bonds), then rescale below.
-    FullCrystalContextResult fullCrystalCtxResult;
-    if(fullCrystalMode){
-        FullCrystalContextParams params;
-        params.referenceFile = _referenceCrystal;
-        params.cationSpecies = _cationSpecies;
-        params.bondCutoff = _fullCrystalCutoff;
-        params.topologyName = _referenceTopologyName.empty() ? "crystal" : _referenceTopologyName;
-        fullCrystalCtxResult = buildFullCrystalContext(frame, context, *structureAnalysis, params);
-
-        if(!fullCrystalCtxResult.ok){
-            throw std::runtime_error("Full-crystal context: " + fullCrystalCtxResult.message);
-        }
-
-        if(!metricRescaleActive){
-            _metricRescaleX = fullCrystalCtxResult.metricRescaleX;
-            _metricRescaleY = fullCrystalCtxResult.metricRescaleY;
-            _metricRescaleZ = fullCrystalCtxResult.metricRescaleZ;
-        }
-
-        spdlog::info("[{:>6}ms] Full-crystal context (cutoff {:.2f} A, grain residual {:.3f} A)",
-                elapsed(), fullCrystalCtxResult.selectedCutoff, fullCrystalCtxResult.grainSnapResidual);
-    }
 
     if(metricRescaleActive){
         spdlog::info(
@@ -133,7 +107,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         analysisCell.setMatrix(cellMatrix);
     }
 
-    if(!fullCrystalMode){
+    {
         std::string reconstructionError;
         if(!ReconstructedStructureLoader::load(
             frame,
@@ -171,10 +145,10 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             }
 
             structureAnalysis->setNeighborLatticeVectorOverrides(std::move(overrides), stride);
-        }
 
-        // Full-crystal maxNeighborDistance was set in physical units; isotropize it.
-        if(fullCrystalMode){
+            // The contract's maxNeighborDistance is in physical units; isotropize
+            // it to match the rescaled positions/overrides so the ghost layer and
+            // alpha-shape thresholds stay consistent in the analysis frame.
             const double smax = std::max({_metricRescaleX, _metricRescaleY, _metricRescaleZ});
             context.maximumNeighborDistance /= smax;
         }

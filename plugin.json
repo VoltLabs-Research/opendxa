@@ -10,7 +10,7 @@
                 },
                 "data": {
                     "modifier": {
-                        "name": "Dislocation Analysis",
+                        "name": "Dislocation Analysis (Experimental)",
                         "key": "opendxa",
                         "icon": "HiCube",
                         "author": "Rodolfo Herrera",
@@ -39,7 +39,8 @@
                                 "plugins": [
                                     "polyhedral-template-matching",
                                     "adaptive-common-neighbor-analysis",
-                                    "pattern-structure-matching"
+                                    "pattern-structure-matching",
+                                    "reference-crystal-matching"
                                 ]
                             },
                             {
@@ -50,7 +51,8 @@
                                 "plugins": [
                                     "polyhedral-template-matching",
                                     "adaptive-common-neighbor-analysis",
-                                    "pattern-structure-matching"
+                                    "pattern-structure-matching",
+                                    "reference-crystal-matching"
                                 ]
                             },
                             {
@@ -61,7 +63,8 @@
                                 "plugins": [
                                     "polyhedral-template-matching",
                                     "adaptive-common-neighbor-analysis",
-                                    "pattern-structure-matching"
+                                    "pattern-structure-matching",
+                                    "reference-crystal-matching"
                                 ]
                             },
                             {

@@ -117,20 +117,6 @@ public:
         _metricRescaleZ = sc;
     }
 
-    // Build the elastic mapping from a perfect reference crystal
-    // instead of upstream cluster tables.
-    void setReferenceCrystal(std::string path){
-        _referenceCrystal = std::move(path);
-    }
-
-    void setCationSpecies(int species){
-        _cationSpecies = species;
-    }
-
-    void setFullCrystalCutoff(double cutoff){
-        _fullCrystalCutoff = cutoff;
-    }
-
 private:
     std::string _referenceTopologyName;
 
@@ -161,13 +147,6 @@ private:
     std::string _clustersTablePath;
     std::string _clusterTransitionsPath;
     std::string _neighborLatticePath;
-
-    // Full crystal (reference-driven) mode.
-    std::string _referenceCrystal;
-    int _cationSpecies = 1;
-
-    // 0 = auto-select cutoff
-    double _fullCrystalCutoff = 0.0;  
 };
 
 }
