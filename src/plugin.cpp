@@ -16,6 +16,7 @@ using S = DislocationAnalysis;
 static const std::vector<OptionBinding<S>> bindings = {
     opt("--clusters_table", "Clusters table path", "", &S::setClustersTablePath),
     opt("--clusters_transitions", "Transitions path", "", &S::setClusterTransitionsPath),
+    opt("--neighbor_lattice", "Per-atom neighbor topology parquet path", "", &S::setNeighborLatticePath),
     opt("--max_trial_circuit_size", "Max trial circuit size", 14.0, &S::setMaxTrialCircuitSize),
     opt("--circuit_stretchability", "Circuit stretchability", 9.0, &S::setCircuitStretchability),
     opt("--line_smoothing_level", "Line smoothing level", 1.0, &S::setLineSmoothingLevel),

@@ -4,7 +4,7 @@ from conan.tools.cmake import CMake, CMakeToolchain, CMakeDeps, cmake_layout
 
 class OpenDXAConan(ConanFile):
     name = "opendxa"
-    version = "2.0.3"
+    version = "2.0.4"
     package_type = "static-library"
     license = "MIT"
     settings = "os", "arch", "compiler", "build_type"
@@ -12,13 +12,13 @@ class OpenDXAConan(ConanFile):
     requires = (
         "boost/1.88.0",
         "onetbb/2021.12.0",
-        "coretoolkit/[>=2.0]",
-        "structure-identification/[>=2.0]",
+        "coretoolkit/[>=2.5]",
+        "structure-identification/[>=2.1]",
         "spdlog/1.14.1",
         "nlohmann_json/3.11.3",
         "yaml-cpp/0.8.0",
     )
-    exports_sources = "CMakeLists.txt", "include/*", "src/*", "lattices/*", "lattices/**/*"
+    exports_sources = "CMakeLists.txt", "include/*", "src/*", "lattices/*", "lattices/**/*", "dependencies/*", "dependencies/**/*", "structures/*", "structures/**/*"
 
     def layout(self):
         cmake_layout(self)

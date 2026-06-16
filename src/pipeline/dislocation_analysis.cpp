@@ -64,6 +64,9 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     if(!fullCrystalMode && (_clustersTablePath.empty() || _clusterTransitionsPath.empty())){
         throw std::runtime_error("OpenDXA requires --clusters_table and --clusters_transitions for reconstruct Cluster Graph");
     }
+    if(!fullCrystalMode && _neighborLatticePath.empty()){
+        throw std::runtime_error("OpenDXA requires --neighbor_lattice (per-atom neighbor topology parquet) for reconstruct Cluster Graph");
+    }
 
     std::shared_ptr<ParticleProperty> positions = std::move(prepared.positions);
 
@@ -134,6 +137,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         std::string reconstructionError;
         if(!ReconstructedStructureLoader::load(
             frame,
+            _neighborLatticePath,
             {_clustersTablePath, _clusterTransitionsPath},
             *structureAnalysis,
             context,
