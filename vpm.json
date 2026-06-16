@@ -1,6 +1,6 @@
 {
   "name": "@voltlabs/opendxa",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "kind": "workflow",
   "publisher": "voltlabs",
   "description": "Identifies and characterizes dislocations using the user-selected structure identification method.",

@@ -15,7 +15,7 @@
                         "icon": "HiCube",
                         "author": "Rodolfo Herrera",
                         "license": "MIT",
-                        "version": "2.0.3",
+                        "version": "2.0.4",
                         "homepage": "https://github.com/rodyherrera/Volterra",
                         "description": "Analisis de dislocaciones a partir del algoritmo de identificacion de estructura seleccionado por el usuario."
                     }
@@ -46,6 +46,17 @@
                                 "argument": "clusters_transitions",
                                 "type": "string",
                                 "label": "Clusters Transitions",
+                                "inferFromContext": true,
+                                "plugins": [
+                                    "polyhedral-template-matching",
+                                    "adaptive-common-neighbor-analysis",
+                                    "pattern-structure-matching"
+                                ]
+                            },
+                            {
+                                "argument": "neighbor_lattice",
+                                "type": "string",
+                                "label": "Neighbor Lattice",
                                 "inferFromContext": true,
                                 "plugins": [
                                     "polyhedral-template-matching",
@@ -181,6 +192,12 @@
                                 "required": true,
                                 "cliFlag": "--clusters_transitions",
                                 "description": "Cluster transitions table produced by an upstream structure-identification step."
+                            },
+                            {
+                                "name": "neighborLattice",
+                                "required": true,
+                                "cliFlag": "--neighbor_lattice",
+                                "description": "Per-atom neighbor topology parquet (neighbor_indices_* + neighbor_lattice_*) produced by an upstream structure-identification step (PTM/ACNA/PSM)."
                             }
                         ]
                     }

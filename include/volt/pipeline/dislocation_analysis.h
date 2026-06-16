@@ -35,6 +35,10 @@ public:
         _clusterTransitionsPath = std::move(path);
     }
 
+    void setNeighborLatticePath(std::string path){
+        _neighborLatticePath = std::move(path);
+    }
+
     void setLineSmoothingLevel(double lineSmoothingLevel){
         _lineSmoothingLevel = lineSmoothingLevel;
     }
@@ -156,6 +160,7 @@ private:
 
     std::string _clustersTablePath;
     std::string _clusterTransitionsPath;
+    std::string _neighborLatticePath;
 
     // Full crystal (reference-driven) mode.
     std::string _referenceCrystal;
