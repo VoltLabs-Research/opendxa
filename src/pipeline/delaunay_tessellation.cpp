@@ -1,12 +1,11 @@
 #include <volt/core/volt.h>
 #include <volt/pipeline/delaunay_tessellation.h>
 
-#include <boost/random/mersenne_twister.hpp>
-#include <boost/random/uniform_real.hpp>
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
 #include <spdlog/spdlog.h>
 #include <numeric>
+#include <cstdint>
 #include <algorithm>
 #include <thread>
 
@@ -32,21 +31,27 @@ void DelaunayTessellation::generateTessellation(
 
 	_simCell = simCell;
 
-	// Parallel point wrapping + jitter
+	auto jitterFor = [epsilon](std::size_t atomIndex, unsigned axis) -> double {
+		z += 0x9E3779B97F4A7C15ull;
+		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+		z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+		z ^= z >> 31;
+		const double unit = static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);
+		return epsilon * (2.0 * unit - 1.0);
+	};
+
 	if(!selectedPoints){
 		_pointData.resize(numPoints);
 		_particleIndices.resize(numPoints);
 
 		tbb::parallel_for(tbb::blocked_range<size_t>(0, numPoints, 4096),
 			[&](const tbb::blocked_range<size_t>& r){
-			std::mt19937 localRng(4 + static_cast<unsigned>(r.begin()));
-			boost::random::uniform_real_distribution<double> disp(-epsilon, epsilon);
 			for(size_t i = r.begin(); i < r.end(); ++i){
 				Point3 wp = simCell.wrapPoint(positions[i]);
 				_pointData[i] = Point3(
-					(double)wp.x() + disp(localRng),
-					(double)wp.y() + disp(localRng),
-					(double)wp.z() + disp(localRng)
+					(double)wp.x() + jitterFor(i, 0),
+					(double)wp.y() + jitterFor(i, 1),
+					(double)wp.z() + jitterFor(i, 2)
 				);
 				_particleIndices[i] = i;
 			}
@@ -57,15 +62,13 @@ void DelaunayTessellation::generateTessellation(
 		_pointData.clear();
 		_particleIndices.reserve(numPoints);
 		_pointData.reserve(numPoints);
-		std::mt19937 rng(4);
-		boost::random::uniform_real_distribution<double> displacement(-epsilon, epsilon);
 		for(size_t i = 0; i < numPoints; i++, ++positions){
 			if(!*selectedPoints++){ continue; }
 			Point3 wp = simCell.wrapPoint(*positions);
 			_pointData.emplace_back(
-				(double)wp.x() + displacement(rng),
-				(double)wp.y() + displacement(rng),
-				(double)wp.z() + displacement(rng)
+				(double)wp.x() + jitterFor(i, 0),
+				(double)wp.y() + jitterFor(i, 1),
+				(double)wp.z() + jitterFor(i, 2)
 			);
 			_particleIndices.push_back(i);
 		}
