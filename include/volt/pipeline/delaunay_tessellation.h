@@ -95,6 +95,12 @@ public:
 		size_t numPoints, double ghostLayerSize, bool coverDomainWithFiniteTets, const int* selectedPoints = nullptr);
 
     void releaseMemory() noexcept;
+
+    void setMaxDelaunayThreads(int threads){
+        _maxDelaunayThreads = threads;
+    }
+
+    static constexpr unsigned int kDefaultMaxDelaunayThreads = 16;
 	
     [[nodiscard]] size_type numberOfTetrahedra() const{
 		return _dt->nb_cells();
@@ -199,6 +205,7 @@ private:
 
     size_type _primaryVertexCount = 0;
     size_type _numPrimaryTetrahedra = 0;
+    int _maxDelaunayThreads = 0;  
 
     SimulationCell _simCell;
 };

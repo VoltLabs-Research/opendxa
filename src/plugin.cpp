@@ -22,11 +22,18 @@ static const std::vector<OptionBinding<S>> bindings = {
     opt("--ghost_layer_scale", "Ghost layer scale", 3.5, &S::setGhostLayerScale),
     opt("--interface_alpha_scale", "Interface alpha scale", 5.0, &S::setInterfaceAlphaScale),
     opt("--crystal_path_steps", "Crystal path search depth", 4, &S::setCrystalPathSteps),
+    // The three optional diagnostic exports below default to OFF, matching
+    // DislocationAnalysis's own constructor. They used to default to ON here, which
+    // silently contradicted the constructor and dominated the runtime: measured on a
+    // 7.3M-atom nanocrystal, the Export stage was 69.5 s of a 158 s run, of which
+    // interface_mesh 10.2 s, structure_identification 9.4 s and
+    // coherent_crystalline_regions 37.7 s — 57 s for three diagnostics nobody asked
+    // for. Dislocations themselves cost 0.3 s and the defect mesh 11.9 s.
     opt("--export_defect_mesh", "Export defect mesh", true, &S::setExportDefectMesh),
-    opt("--export_interface_mesh", "Export interface mesh", true, &S::setExportInterfaceMesh),
+    opt("--export_interface_mesh", "Export interface mesh (currently byte-identical to the defect mesh)", false, &S::setExportInterfaceMesh),
     opt("--export_delaunay_tessellation", "Export Delaunay tessellation", false, &S::setExportDelaunayTessellation),
-    opt("--export_structure_identification", "Export structure identification", true, &S::setExportStructureIdentification),
-    opt("--export_coherent_crystalline_regions", "Export coherent crystalline regions", true, &S::setExportCoherentCrystallineRegions),
+    opt("--export_structure_identification", "Export per-atom structure identification", false, &S::setExportStructureIdentification),
+    opt("--export_coherent_crystalline_regions", "Export coherent crystalline regions", false, &S::setExportCoherentCrystallineRegions),
     opt("--export_dislocations", "Export dislocations", true, &S::setExportDislocations),
     opt("--export_circuit_information", "Export circuit information", true, &S::setExportCircuitInformation),
     opt("--export_dislocation_network_stats", "Export network stats", true, &S::setExportDislocationNetworkStats),
