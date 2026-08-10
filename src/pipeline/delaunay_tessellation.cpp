@@ -7,6 +7,8 @@
 #include <tbb/blocked_range.h>
 #include <spdlog/spdlog.h>
 #include <numeric>
+#include <algorithm>
+#include <thread>
 
 namespace Volt{
 
@@ -171,21 +173,35 @@ void DelaunayTessellation::generateTessellation(
 		}
 	}
 
-	spdlog::info("  Geogram Delaunay (serial BDEL): inserting {} points ({} primary + {} ghost)",
+	spdlog::info("  Geogram Delaunay: inserting {} points ({} primary + {} ghost)",
 		_pointData.size(), _primaryVertexCount, _pointData.size() - _primaryVertexCount);
 
-	// Use BDEL (serial Delaunay3d) instead of PDEL (ParallelDelaunay3d).
-	// PDEL deadlocks/livelocks on high-core hosts: reproduced on a 160-core
-	// EPYC where it hangs at point insertion regardless of the configured
-	// thread count (160 threads -> spin at 99.9% CPU; 1 thread -> sleeping
-	// deadlock). The serial backend is robust and fast enough for our point
-	// counts (tens of thousands of points).
-	_dt = GEO::Delaunay::create(3, "BDEL");
+	const char* backend = "BDEL";
+#ifdef VOLT_HAVE_PARALLEL_DELAUNAY
+	if(_maxDelaunayThreads != 1){
+		unsigned int hw = std::thread::hardware_concurrency();
+		if(hw == 0){ hw = 1; }
+		unsigned int threads = (_maxDelaunayThreads > 0)
+			? static_cast<unsigned int>(_maxDelaunayThreads)
+			: std::min(hw, kDefaultMaxDelaunayThreads);
+		threads = std::max(1u, std::min(threads, hw));
+		if(threads > 1){
+			GEO::Process::set_max_threads(threads);
+			backend = "PDEL";
+		}
+	}
+#endif
+	_dt = GEO::Delaunay::create(3, backend);
+	if(_dt.is_null()){
+		spdlog::warn("  Geogram Delaunay: backend '{}' unavailable, falling back to BDEL", backend);
+		backend = "BDEL";
+		_dt = GEO::Delaunay::create(3, backend);
+	}
 	_dt->set_keeps_infinite(true);
 	_dt->set_reorder(true);
 	_dt->set_vertices(_pointData.size(), reinterpret_cast<const double*>(_pointData.data()));
 
-	spdlog::info("  Geogram Delaunay (serial BDEL) complete: {} cells", _dt->nb_cells());
+	spdlog::info("  Geogram Delaunay ({}) complete: {} cells", backend, _dt->nb_cells());
 
 	// Classify cells (parallel)
 	const size_t numCells = _dt->nb_cells();
