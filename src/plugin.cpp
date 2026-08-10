@@ -2,8 +2,10 @@
 #include <volt/pipeline/dislocation_analysis.h>
 #include <volt/structures/crystal_topology_registry.h>
 
+#include <algorithm>
 #include <array>
 #include <string>
+#include <vector>
 
 using namespace Volt;
 using namespace Volt::Plugin;
@@ -21,10 +23,10 @@ static const std::vector<OptionBinding<S>> bindings = {
     opt("--interface_alpha_scale", "Interface alpha scale", 5.0, &S::setInterfaceAlphaScale),
     opt("--crystal_path_steps", "Crystal path search depth", 4, &S::setCrystalPathSteps),
     opt("--export_defect_mesh", "Export defect mesh", true, &S::setExportDefectMesh),
-    opt("--export_interface_mesh", "Export interface mesh", false, &S::setExportInterfaceMesh),
+    opt("--export_interface_mesh", "Export interface mesh", true, &S::setExportInterfaceMesh),
     opt("--export_delaunay_tessellation", "Export Delaunay tessellation", false, &S::setExportDelaunayTessellation),
-    opt("--export_structure_identification", "Export structure identification", false, &S::setExportStructureIdentification),
-    opt("--export_coherent_crystalline_regions", "Export coherent crystalline regions", false, &S::setExportCoherentCrystallineRegions),
+    opt("--export_structure_identification", "Export structure identification", true, &S::setExportStructureIdentification),
+    opt("--export_coherent_crystalline_regions", "Export coherent crystalline regions", true, &S::setExportCoherentCrystallineRegions),
     opt("--export_dislocations", "Export dislocations", true, &S::setExportDislocations),
     opt("--export_circuit_information", "Export circuit information", true, &S::setExportCircuitInformation),
     opt("--export_dislocation_network_stats", "Export network stats", true, &S::setExportDislocationNetworkStats),
@@ -33,9 +35,37 @@ static const std::vector<OptionBinding<S>> bindings = {
     opt("--cover_domain_with_finite_tets", "Cover domain with finite tets", false, &S::setCoverDomainWithFiniteTets),
 };
 
+static void refineTopologyDomain(std::vector<CliOption>& options, const OptsMap& opts) {
+    const auto latticeDir = CLI::getString(opts, "--lattice_dir", "");
+    if(latticeDir.empty()){
+        return;
+    }
+    std::vector<std::string> names;
+    try{
+        setCrystalTopologySearchRoot(latticeDir);
+        for(const auto& entry : crystalTopologyRegistry().entries()){
+            names.push_back(entry.name);
+        }
+    }catch(const std::exception&){
+        return;
+    }
+    if(names.empty()){
+        return;
+    }
+    std::sort(names.begin(), names.end());
+    for(auto& option : options){
+        if(option.name == "--reference_topology"){
+            option.type = "enum";
+            option.values = std::move(names);
+            return;
+        }
+    }
+}
+
 static PluginDescriptor buildDescriptor() {
     auto meta = optionsMeta(bindings);
-    meta.insert(meta.begin(), {"--lattice_dir", "path", "Directory containing reference lattice/topology YAMLs", ""});
+    meta.insert(meta.begin(), {"--lattice_dir", "path",
+        "Directory containing reference lattice/topology YAMLs", "", {}, "share/volt/lattices"});
     meta.insert(meta.begin() + 1, {"--reference_topology", "string",
         "Reference structure name the Burgers vectors are expressed in. OpenDXA consumes the "
         "contract (--clusters_table + --clusters_transitions + --neighbor_lattice) produced by an "
@@ -48,7 +78,9 @@ static PluginDescriptor buildDescriptor() {
         "coords/(sx,sy,sz); ideal vectors are rescaled to match, and the Burgers vector comes out in "
         "lattice units (multiply components by sx,sy,sz for Angstrom). For reference-built contracts, "
         "use the factors reported by the ReferenceCrystalMatching producer. Default: off (1,1,1).", ""});
-    return {"volt-dxa", "Full Dislocation Analysis", std::move(meta)};
+    PluginDescriptor descriptor{"volt-dxa", "Full Dislocation Analysis", std::move(meta)};
+    descriptor.refine = refineTopologyDomain;
+    return descriptor;
 }
 
 static bool parseMetricRescale(const std::string& raw, double& rescaleX, double& rescaleY, double& rescaleZ){
@@ -99,20 +131,12 @@ VOLT_PLUGIN_MAIN(buildDescriptor(),
     S analyzer;
     applyAll(analyzer, bindings, opts);
 
-    // OpenDXA is a pure consumer of the structure-identification contract
-    // (--clusters_table + --clusters_transitions + --neighbor_lattice + the
-    // annotated dump). The reference topology name is only used to re-express the
-    // Burgers vector (a string match against the contract's topology_name). If it
-    // matches a known topology YAML, canonicalize the name; otherwise (or if no
-    // topology registry is configured) use the contract-supplied name as-is.
     std::string resolvedTopology = referenceName;
     try{
         if(const auto* topology = crystalTopologyByName(referenceName)){
             resolvedTopology = topology->name;
         }
     }catch(const std::exception&){
-        // No topology search root / empty registry: the producer-supplied name
-        // already matches the contract, so fall through with it unchanged.
     }
     analyzer.setReferenceTopology(resolvedTopology);
 
