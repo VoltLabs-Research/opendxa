@@ -238,8 +238,14 @@ bool BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
         }
     });
 
-    // Phase 2: Serial creation — use original createBurgersCircuit logic
-    // Re-do BFS from the candidate vertices and create circuits serially
+    std::sort(candidates.begin(), candidates.end(),
+        [](const Candidate& a, const Candidate& b){
+            const int a1 = a.edge->vertex1()->index();
+            const int b1 = b.edge->vertex1()->index();
+            if(a1 != b1) return a1 < b1;
+            return a.edge->vertex2()->index() < b.edge->vertex2()->index();
+        });
+
     MemoryPool<SearchNode> pool;
     std::vector<SearchNode*> queue;
     queue.reserve(1024);
