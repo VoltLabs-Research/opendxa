@@ -31,7 +31,14 @@ void DelaunayTessellation::generateTessellation(
 
 	_simCell = simCell;
 
+	// Symbolic perturbation to break degeneracies (coplanar/cospherical points) before handing
+	// the cloud to Geogram. splitmix64 over a seed derived from the atom index and the axis, so
+	// the jitter is a pure function of (atom, axis): it must not depend on thread scheduling —
+	// the callers below run inside a parallel_for — and it must reproduce across runs, so that
+	// the same frame always yields the same tessellation. atomIndex*3+axis is injective for
+	// axis in {0,1,2} and splitmix64 is a bijection, so every pair gets its own value.
 	auto jitterFor = [epsilon](std::size_t atomIndex, unsigned axis) -> double {
+		std::uint64_t z = static_cast<std::uint64_t>(atomIndex) * 3ull + axis;
 		z += 0x9E3779B97F4A7C15ull;
 		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
 		z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
