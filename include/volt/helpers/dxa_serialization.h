@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <optional>
+
 #include <volt/helpers/dislocation_network.h>
 #include <volt/pipeline/delaunay_tessellation.h>
 #include <volt/pipeline/interface_mesh.h>
@@ -39,11 +41,24 @@ void streamDislocationsToFile(
     const DislocationsExportOptions& options = {}
 );
 
-void streamDefectMeshToFile(
+// Whole-mesh classification produced by InterfaceMesh::createMesh. It describes the interface
+// mesh only, so the defect mesh — which is a filtered copy of it — omits the block instead of
+// repeating a verdict that does not apply to it.
+struct InterfaceMeshFlags{
+    bool isCompletelyGood;
+    bool isCompletelyBad;
+};
+
+// Serializes either DXA surface (interface mesh or defect mesh) to the standard mesh payload:
+// export.MeshExporter for the 3D renderer, sub_listings for the daemon's tabular listing
+// reader, plus an optional topology block. Takes the topology base type so the defect mesh,
+// which is not an InterfaceMesh, goes through the same path.
+void streamMeshToFile(
     const std::string& filePath,
-    const InterfaceMesh& interfaceMesh,
+    const InterfaceMeshTopology& mesh,
     const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo
+    bool includeTopologyInfo,
+    const std::optional<InterfaceMeshFlags>& interfaceFlags = std::nullopt
 );
 
 void streamDelaunayTessellationToFile(

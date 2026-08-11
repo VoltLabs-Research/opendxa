@@ -191,6 +191,22 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     DislocationNetwork& network = tracer.network();
     spdlog::info("Found {} dislocation segments", network.segments().size());
 
+    // Derive the defect mesh here, not down in the export block: the caps are anchored at the
+    // dangling nodes' line endpoints, and both the metric rescale and the smoothing below
+    // rewrite segment->line in place. Running after either of them would place the caps in a
+    // different frame than the mesh vertices they are stitched to.
+    InterfaceMeshTopology defectMesh;
+    const bool needDefectMesh = _exportDefectMesh && !outputFile.empty();
+    if(needDefectMesh){
+        if(!interfaceMesh.generateDefectMesh(tracer, defectMesh)){
+            spdlog::warn("Defect mesh is not watertight: at least one dislocation hole was left uncapped");
+        }
+        spdlog::info(
+            "[{:>6}ms] Defect mesh ({} of {} interface facets kept, {} vertices)",
+            elapsed(), defectMesh.faceCount(), interfaceMesh.faceCount(), defectMesh.vertexCount()
+        );
+    }
+
     if(metricRescaleActive){
         for(DislocationSegment* segment : network.segments()){
             if(!segment) continue;
@@ -208,14 +224,18 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     spdlog::info("[{:>6}ms] Line smoothing", elapsed());
 
     if(!outputFile.empty()){
-        if(_exportDefectMesh){
+        if(needDefectMesh){
             spdlog::info("Writing defect mesh data");
-            DxaSerialization::streamDefectMeshToFile(
+            DxaSerialization::streamMeshToFile(
                 outputFile + "_defect_mesh.parquet",
-                interfaceMesh,
+                defectMesh,
                 interfaceMesh.structureAnalysis(),
                 true
             );
+
+            // Roughly a second copy of the interface mesh; release it before the remaining
+            // exports rather than holding it until the end of the function.
+            defectMesh.clear();
         }
 
         if(_exportDislocations){
@@ -236,12 +256,16 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         }
 
         if(_exportInterfaceMesh){
-            spdlog::info("Writing mesh data");
-            DxaSerialization::streamDefectMeshToFile(
+            spdlog::info("Writing interface mesh data");
+            DxaSerialization::streamMeshToFile(
                 outputFile + "_interface_mesh.parquet",
                 interfaceMesh,
                 interfaceMesh.structureAnalysis(),
-                true
+                true,
+                DxaSerialization::InterfaceMeshFlags{
+                    interfaceMesh.isCompletelyGood(),
+                    interfaceMesh.isCompletelyBad()
+                }
             );
         }
 

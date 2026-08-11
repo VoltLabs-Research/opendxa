@@ -775,14 +775,15 @@ void streamDislocationsToFile(
     JsonUtils::writeJsonToParquet(doc, summaryFilePath);
 }
 
-void streamDefectMeshToFile(
+void streamMeshToFile(
     const std::string& filePath,
-    const InterfaceMesh& interfaceMesh,
+    const InterfaceMeshTopology& mesh,
     const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo
+    bool includeTopologyInfo,
+    const std::optional<InterfaceMeshFlags>& interfaceFlags
 ){
-    const auto& originalVertices = interfaceMesh.vertices();
-    const auto& originalFaces = interfaceMesh.faces();
+    const auto& originalVertices = mesh.vertices();
+    const auto& originalFaces = mesh.faces();
     const auto& cell = structureAnalysis.context().simCell;
 
     // Pre-compute export data (positions + face indices with PBC unwrapping)
@@ -869,10 +870,12 @@ void streamDefectMeshToFile(
             }while(edge != face->edges());
         }
         doc["topology"] = {
-            {"euler_characteristic", static_cast<int64_t>(originalVertices.size()) - static_cast<int64_t>(edgeSet.size()) + static_cast<int64_t>(originalFaces.size())},
-            {"is_completely_good", interfaceMesh.isCompletelyGood()},
-            {"is_completely_bad", interfaceMesh.isCompletelyBad()}
+            {"euler_characteristic", static_cast<int64_t>(originalVertices.size()) - static_cast<int64_t>(edgeSet.size()) + static_cast<int64_t>(originalFaces.size())}
         };
+        if(interfaceFlags){
+            doc["topology"]["is_completely_good"] = interfaceFlags->isCompletelyGood;
+            doc["topology"]["is_completely_bad"] = interfaceFlags->isCompletelyBad;
+        }
     }
 
     JsonUtils::writeJsonToParquet(doc, filePath);
