@@ -131,66 +131,80 @@ void InterfaceMesh::createMesh(double maxNeighborDist, double alphaScale){
     makeManifold();
 }
 
-// After tracing dislocation circuits on the interface mesh, extract only
-// those triangular facets that lie inside dislocation "holes" or caps
-// on dangling circuits. We produce a separate half-edge mesh for defect surfaces,
-// stitching in new triangles around each dangling Burgers circuit cap. 
-void InterfaceMesh::generateDefectMesh(
+// After tracing dislocation circuits on the interface mesh, drop the facets the tracing
+// claimed for a dislocation and keep the rest, so what remains is the surface bounding the
+// non-crystalline regions with a hole where each dislocation line passes through. Those holes
+// are then capped, one fan of triangles per dangling Burgers circuit, making the result a
+// closed surface again. The output is a separate half-edge mesh; this one is left untouched.
+bool InterfaceMesh::generateDefectMesh(
     BurgersLoopBuilder const& tracer,
-    HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>& outMesh
-){
-    // Copy all interface vertices into the output mesh at the same indices
+    InterfaceMeshTopology& outMesh
+) const{
+    // Copy every interface vertex, keyed by its original index rather than by iteration
+    // order, so nothing downstream depends on the two meshes staying positionally aligned.
+    std::vector<Vertex*> vertexMap(vertexCount(), nullptr);
     outMesh.reserveVertices(vertexCount());
     for(auto* v : vertices()){
         auto* nv = outMesh.createVertex(v->pos());
-        //assert(nv->index() == v->index());
+        if(v->index() >= 0 && static_cast<size_t>(v->index()) < vertexMap.size()){
+            vertexMap[v->index()] = nv;
+        }
     }
 
-    // Build every face that is not "blocked" by a valid Burger circuit,
-    // skipping those with a dangling circuit (holes).
-	std::vector<Face*> faceMap;
-    faceMap.reserve(faces().size());
+    auto mapped = [&](Vertex* v) -> Vertex*{
+        const int idx = v ? v->index() : -1;
+        return (idx >= 0 && static_cast<size_t>(idx) < vertexMap.size()) ? vertexMap[idx] : nullptr;
+    };
+
+    // A facet belongs to a dislocation — and so is left out of the defect mesh — when it sits
+    // on a Burgers circuit that either was swept by a primary segment (flag 1) or has already
+    // been closed into a segment (!isDangling). Facets on still-dangling circuits are the rims
+    // of the holes we cap further down, so they stay.
+    std::vector<Face*> faceMap(faces().size(), nullptr);
+    outMesh.reserveFaces(faces().size());
 
     for(auto* f : faces()){
-        // Skip faces that lie on any kept Burgers-circuit boundary
-        if(f->circuit && (f->testFlag(1) || !f->circuit->isDangling)){
-            faceMap.push_back(nullptr);
-            continue;
-        }
+        if(f->circuit && (f->testFlag(1) || !f->circuit->isDangling)) continue;
+        if(!f->edges()) continue;
 
-        // Otherwise create a new triangular face in the output mesh
         auto* nf = outMesh.createFace();
-        faceMap.push_back(nf);
+        if(f->index() >= 0 && static_cast<size_t>(f->index()) < faceMap.size()){
+            faceMap[f->index()] = nf;
+        }
 
         // Walk its three edges in order and add half-edges
-        if(auto* e = f->edges()){
-            auto* start = e;
-            do{
-                auto* v1 = outMesh.vertex(e->vertex1()->index());
-                auto* v2 = outMesh.vertex(e->vertex2()->index());
-                outMesh.createEdge(v1, v2, nf);
-                e = e->nextFaceEdge();
-            }while(e != start);
-        }
+        auto* e = f->edges();
+        auto* start = e;
+        do{
+            auto* v1 = mapped(e->vertex1());
+            auto* v2 = mapped(e->vertex2());
+            if(v1 && v2) outMesh.createEdge(v1, v2, nf);
+            e = e->nextFaceEdge();
+        }while(e != start);
     }
 
-    // Link opposite half-edges across triangle boundaries
-    for(size_t i = 0; i < faces().size(); ++i){
-        auto* of = faces()[i];
-        auto* nf = faceMap[i];
-        if(!nf || !of->edges()) continue;
+    // Link opposite half-edges between the pairs of facets that both survived. An edge whose
+    // neighbour was dropped stays unpaired on purpose: that is a hole rim, closed by a cap.
+    for(auto* of : faces()){
+        if(of->index() < 0 || static_cast<size_t>(of->index()) >= faceMap.size()) continue;
+        auto* nf = faceMap[of->index()];
+        if(!nf || !of->edges() || !nf->edges()) continue;
 
         auto* eo = of->edges();
         auto* en = nf->edges();
         auto* startO = eo;
         do{
-            if(eo->oppositeEdge() && !en->oppositeEdge()){
-                auto* oppNF = faceMap[eo->oppositeEdge()->face()->index()];
-                if(oppNF){
+            auto* oppEo = eo->oppositeEdge();
+            if(oppEo && oppEo->face() && !en->oppositeEdge()){
+                const int oppIndex = oppEo->face()->index();
+                auto* oppNF = (oppIndex >= 0 && static_cast<size_t>(oppIndex) < faceMap.size())
+                    ? faceMap[oppIndex]
+                    : nullptr;
+                if(oppNF && oppNF->edges()){
                     auto* ec = oppNF->edges();
                     auto* startC = ec;
                     do{
-                        if(ec->vertex1() == en->vertex2() && ec->vertex2() == en->vertex1()){
+                        if(!ec->oppositeEdge() && ec->vertex1() == en->vertex2() && ec->vertex2() == en->vertex1()){
                             en->linkToOppositeEdge(ec);
                             break;
                         }
@@ -205,22 +219,28 @@ void InterfaceMesh::generateDefectMesh(
         }while(eo != startO);
     }
 
-    // For each dangling BurgersCircuit, cap its hole by creating
-    // a new vertex at the circuit's center and stitching triangles 
-    // between each edge of that circuit loop and the new cap vertex.
+    // Cap each dangling circuit's hole: one vertex at the dislocation line's endpoint, then a
+    // triangle fan from it to every edge of the stored circuit loop. The triangle is wound
+    // opposite to the rim edge so its normal agrees with the surrounding surface.
     for(auto* dn : tracer.danglingNodes()){
+        if(!dn) continue;
         auto* c = dn->circuit;
-        //assert(c && c->segmentMeshCap.size() >= 2);
+        if(!c || c->segmentMeshCap.size() < 2) continue;
 
-        // Add a cap vertex at the circuit center
+        // position() dereferences segment (via isForwardNode()) and then line.front()/back(),
+        // so a null segment or a line that finishDislocationSegments() trimmed down to nothing
+        // would be undefined behaviour. Such a node gets no cap, and the mesh comes back open
+        // from connectOppositeHalfedges() below rather than the caller getting a crash.
+        if(!dn->segment || dn->segment->line.empty()) continue;
+
         auto* capV = outMesh.createVertex(dn->position());
-        
+
         for(auto* me : c->segmentMeshCap){
-            // The corresponding face has no mapping (we skip it), so we 
-            // explicitly build a new triangle: edge end1 -> end2 -> capV
-            //assert(!faceMap[me->oppositeEdge()->face()->index()]);
-            auto* v1 = outMesh.vertex(me->vertex2()->index());
-            auto* v2 = outMesh.vertex(me->vertex1()->index());
+            if(!me) continue;
+            auto* v1 = mapped(me->vertex2());
+            auto* v2 = mapped(me->vertex1());
+            if(!v1 || !v2) continue;
+
             auto* nf = outMesh.createFace();
             outMesh.createEdge(v1, v2, nf);
             outMesh.createEdge(v2, capV, nf);
@@ -228,9 +248,10 @@ void InterfaceMesh::generateDefectMesh(
         }
     }
 
-    // Finally, ensure all half-edges know their opposite partners.
-    // TODO:
-    // assert(outMesh.connectOppositeHalfedges());
+    // Pair up whatever is still unpaired — the cap edges against the rims they close. The
+    // return value is the watertightness check the old code left as a commented-out assert:
+    // false means a hole survived, which the caller reports rather than aborting on.
+    return outMesh.connectOppositeHalfedges();
 }
 
 }
