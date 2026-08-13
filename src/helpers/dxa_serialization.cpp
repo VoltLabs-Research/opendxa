@@ -629,7 +629,8 @@ void streamDislocationsToFile(
     const std::string& summaryFilePath,
     const DislocationNetwork* network,
     const SimulationCell* simulationCell,
-    const DislocationsExportOptions& options
+    const DislocationsExportOptions& options,
+    const StructureAnalysis* structureAnalysis
 ){
     const auto& segments = network->segments();
     std::vector<const DislocationSegment*> validSegments;
@@ -657,6 +658,17 @@ void streamDislocationsToFile(
     int totalPoints = 0;
     double maxLength = 0, minLength = std::numeric_limits<double>::max();
     std::map<std::string, std::pair<int, double>> burgersSummary;
+
+    // Aggregated by family rather than by chart key: the charts keep every distinct
+    // unclassified vector separate, but the results table wants the single "Other" row
+    // OVITO shows, and it needs the family name unmodified so a viewer can look up the
+    // colour the plugin declared for it.
+    struct FamilyTally {
+        std::string label;
+        int segmentCount = 0;
+        double totalLength = 0.0;
+    };
+    std::map<std::string, FamilyTally> familySummary;
 
     for(const auto* segment : validSegments){
         auto emitChunk = [&](const std::vector<Point3>& pts){
@@ -693,6 +705,11 @@ void streamDislocationsToFile(
             minLength = std::min(minLength, len);
             auto& s = burgersSummary[summaryKey];
             s.first++; s.second += len;
+
+            auto& familyTally = familySummary[chunks.back().burgersFamily];
+            familyTally.label = chunks.back().burgersFamilyLabel;
+            familyTally.segmentCount++;
+            familyTally.totalLength += len;
         };
 
         if(simulationCell && options.clipPbcSegments){
@@ -770,6 +787,46 @@ void streamDislocationsToFile(
         subListings["circuit_information"] = getCircuitInformation(network);
     if(options.exportJunctions)
         subListings["junction_information"] = getJunctionInformation(network);
+
+    // The two tables OVITO puts beside this modifier. `burgers_family` is the key the
+    // plugin also declares colours for in plugin.json, so a row and the line it counts
+    // resolve to the same colour; the daemon does not need to know what a family is.
+    json burgersFamilies = json::array();
+    for(const auto& [familyName, tally] : familySummary){
+        burgersFamilies.push_back({
+            {"burgers_family", familyName},
+            {"burgers_family_label", tally.label},
+            {"segment_count", static_cast<int64_t>(tally.segmentCount)},
+            {"total_length", tally.totalLength},
+            {"length_fraction", totalLength > 0 ? tally.totalLength / totalLength : 0.0}
+        });
+    }
+    subListings["burgers_families"] = std::move(burgersFamilies);
+
+    if(structureAnalysis){
+        const auto& structureContext = structureAnalysis->context();
+        const std::size_t atomCount = structureContext.atomCount();
+        std::map<int, std::int64_t> structureCounts;
+        for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
+            const int structureType = structureContext.structureTypes
+                ? structureContext.structureTypes->getInt(atomIndex)
+                : static_cast<int>(StructureType::OTHER);
+            structureCounts[structureType]++;
+        }
+
+        const double atomsForFraction = atomCount > 0 ? static_cast<double>(atomCount) : 1.0;
+        json structureRows = json::array();
+        for(const auto& [structureType, count] : structureCounts){
+            structureRows.push_back({
+                {"structure_id", structureType},
+                {"structure_name", structureTypeNameForExport(structureType)},
+                {"count", count},
+                {"fraction", static_cast<double>(count) / atomsForFraction}
+            });
+        }
+        subListings["structure_counts"] = std::move(structureRows);
+    }
+
     doc["sub_listings"] = std::move(subListings);
 
     JsonUtils::writeJsonToParquet(doc, summaryFilePath);

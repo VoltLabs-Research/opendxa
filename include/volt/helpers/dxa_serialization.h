@@ -33,12 +33,16 @@ BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::stri
 // Streaming export — one row per dislocation segment in the standard VOLT line
 // entity table (id, points, per-segment property columns), plus a separate
 // JSON-payload summary file carrying network statistics and chart data.
+// `structureAnalysis`, when given, adds the per-structure tally to the summary file.
+// That is the second table OVITO shows beside this modifier ("Structure analysis
+// results"), and the counts only exist on the analysis object, not on the network.
 void streamDislocationsToFile(
     const std::string& linesFilePath,
     const std::string& summaryFilePath,
     const DislocationNetwork* network,
     const SimulationCell* simulationCell = nullptr,
-    const DislocationsExportOptions& options = {}
+    const DislocationsExportOptions& options = {},
+    const StructureAnalysis* structureAnalysis = nullptr
 );
 
 // Whole-mesh classification produced by InterfaceMesh::createMesh. It describes the interface

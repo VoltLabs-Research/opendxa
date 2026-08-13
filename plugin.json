@@ -15,7 +15,7 @@
             "icon": "HiCube",
             "author": "Rodolfo Herrera",
             "license": "MIT",
-            "version": "2.1.2",
+            "version": "2.2.0",
             "homepage": "https://github.com/rodyherrera/Volterra",
             "description": "Analisis de dislocaciones a partir del algoritmo de identificacion de estructura seleccionado por el usuario."
           }
@@ -143,6 +143,13 @@
                 "type": "boolean",
                 "label": "Export Defect Mesh",
                 "default": true,
+                "cliValueStyle": "explicit"
+              },
+              {
+                "argument": "export_defect_mesh_interior",
+                "type": "boolean",
+                "label": "Export Defect Mesh (Interior Only)",
+                "default": false,
                 "cliValueStyle": "explicit"
               },
               {
@@ -288,98 +295,98 @@
             "exporter": "LineExporter",
             "type": "glb",
             "options": {
-              "lineWidth": 1.0,
+              "lineWidth": 1,
               "colorBy": "burgers_family",
               "propertyColors": {
                 "Other": [
                   0.9,
                   0.2,
                   0.2,
-                  1.0
+                  1
                 ],
                 "1/2<110>": [
                   0.2,
                   0.2,
-                  1.0,
-                  1.0
+                  1,
+                  1
                 ],
                 "1/6<112>": [
-                  0.0,
-                  1.0,
-                  0.0,
-                  1.0
+                  0,
+                  1,
+                  0,
+                  1
                 ],
                 "1/6<110>": [
-                  1.0,
-                  0.0,
-                  1.0,
-                  1.0
+                  1,
+                  0,
+                  1,
+                  1
                 ],
                 "1/3<100>": [
-                  1.0,
-                  1.0,
-                  0.0,
-                  1.0
+                  1,
+                  1,
+                  0,
+                  1
                 ],
                 "1/3<111>": [
-                  0.0,
-                  1.0,
-                  1.0,
-                  1.0
+                  0,
+                  1,
+                  1,
+                  1
                 ],
                 "1/2<111>": [
                   0.2,
                   0.95,
                   0.2,
-                  1.0
+                  1
                 ],
                 "<100>": [
-                  1.0,
+                  1,
                   0.3,
                   0.8,
-                  1.0
+                  1
                 ],
                 "<110>": [
                   0.2,
                   0.5,
-                  1.0,
-                  1.0
+                  1,
+                  1
                 ],
                 "<111>": [
-                  1.0,
+                  1,
                   0.8,
                   0.2,
-                  1.0
+                  1
                 ],
                 "1/3<1-210>": [
-                  0.0,
-                  1.0,
-                  0.0,
-                  1.0
+                  0,
+                  1,
+                  0,
+                  1
                 ],
                 "1/3<1-100>": [
-                  1.0,
-                  0.0,
-                  1.0,
-                  1.0
+                  1,
+                  0,
+                  1,
+                  1
                 ],
                 "<0001>": [
-                  1.0,
+                  1,
                   0.3,
                   0.8,
-                  1.0
+                  1
                 ],
                 "1/2<0001>": [
-                  1.0,
-                  1.0,
-                  0.0,
-                  1.0
+                  1,
+                  1,
+                  0,
+                  1
                 ],
                 "1/3<1-213>": [
-                  0.0,
-                  1.0,
-                  1.0,
-                  1.0
+                  0,
+                  1,
+                  1,
+                  1
                 ]
               },
               "material": {
@@ -435,6 +442,45 @@
             "type": "glb",
             "options": {
               "reverseOrientation": true
+            }
+          }
+        }
+      },
+      {
+        "id": "defect-mesh-interior-exposure",
+        "type": "exposure",
+        "position": {
+          "x": 2016,
+          "y": 616
+        },
+        "data": {
+          "exposure": {
+            "name": "Defect Mesh (Interior)",
+            "icon": "HiCube",
+            "results": "defect_mesh.parquet",
+            "iterable": "",
+            "exportWhen": {
+              "argument": "export_defect_mesh_interior",
+              "operator": "equals",
+              "value": true
+            }
+          }
+        }
+      },
+      {
+        "id": "defect-mesh-interior-export",
+        "type": "export",
+        "position": {
+          "x": 2336,
+          "y": 616
+        },
+        "data": {
+          "export": {
+            "exporter": "MeshExporter",
+            "type": "glb",
+            "options": {
+              "reverseOrientation": true,
+              "interiorOnly": true
             }
           }
         }
@@ -505,7 +551,47 @@
         "data": {
           "export": {
             "exporter": "AtomisticExporter",
-            "type": "glb"
+            "type": "glb",
+            "options": {
+              "propertyColors": {
+                "OTHER": [
+                  0.949,
+                  0.949,
+                  0.949,
+                  1
+                ],
+                "FCC": [
+                  0.4,
+                  1,
+                  0.4,
+                  1
+                ],
+                "HCP": [
+                  1,
+                  0.4,
+                  0.4,
+                  1
+                ],
+                "BCC": [
+                  0.4,
+                  0.4,
+                  1,
+                  1
+                ],
+                "CUBIC_DIAMOND": [
+                  0.0745,
+                  0.6275,
+                  0.9961,
+                  1
+                ],
+                "HEX_DIAMOND": [
+                  0.9961,
+                  0.5373,
+                  0,
+                  1
+                ]
+              }
+            }
           }
         }
       },
@@ -720,6 +806,20 @@
         "source": "defect-mesh-exposure",
         "sourceHandle": "output",
         "target": "defect-mesh-export",
+        "targetHandle": "input"
+      },
+      {
+        "id": "edge-entrypoint-defect-mesh-interior-exposure",
+        "source": "analysis-entrypoint",
+        "sourceHandle": "output",
+        "target": "defect-mesh-interior-exposure",
+        "targetHandle": "input"
+      },
+      {
+        "id": "edge-defect-mesh-interior-exposure-defect-mesh-interior-export",
+        "source": "defect-mesh-interior-exposure",
+        "sourceHandle": "output",
+        "target": "defect-mesh-interior-export",
         "targetHandle": "input"
       },
       {
