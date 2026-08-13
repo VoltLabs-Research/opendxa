@@ -15,7 +15,7 @@
             "icon": "HiCube",
             "author": "Rodolfo Herrera",
             "license": "MIT",
-            "version": "2.1.1",
+            "version": "2.1.2",
             "homepage": "https://github.com/rodyherrera/Volterra",
             "description": "Analisis de dislocaciones a partir del algoritmo de identificacion de estructura seleccionado por el usuario."
           }
@@ -130,6 +130,48 @@
                 "default": 2.5,
                 "min": 0,
                 "step": 0.1
+              },
+              {
+                "argument": "export_dislocations",
+                "type": "boolean",
+                "label": "Export Dislocations",
+                "default": true,
+                "cliValueStyle": "explicit"
+              },
+              {
+                "argument": "export_defect_mesh",
+                "type": "boolean",
+                "label": "Export Defect Mesh",
+                "default": true,
+                "cliValueStyle": "explicit"
+              },
+              {
+                "argument": "export_dislocation_network_stats",
+                "type": "boolean",
+                "label": "Export Network Statistics",
+                "default": true,
+                "cliValueStyle": "explicit"
+              },
+              {
+                "argument": "export_interface_mesh",
+                "type": "boolean",
+                "label": "Export Interface Mesh",
+                "default": false,
+                "cliValueStyle": "explicit"
+              },
+              {
+                "argument": "export_structure_identification",
+                "type": "boolean",
+                "label": "Export Structure Identification",
+                "default": false,
+                "cliValueStyle": "explicit"
+              },
+              {
+                "argument": "export_coherent_crystalline_regions",
+                "type": "boolean",
+                "label": "Export Crystalline Coherent Regions",
+                "default": false,
+                "cliValueStyle": "explicit"
               }
             ]
           }
@@ -225,7 +267,12 @@
                 "label": "Cluster",
                 "type": "number"
               }
-            ]
+            ],
+            "exportWhen": {
+              "argument": "export_dislocations",
+              "operator": "equals",
+              "value": true
+            }
           }
         }
       },
@@ -241,7 +288,7 @@
             "exporter": "LineExporter",
             "type": "glb",
             "options": {
-              "lineWidth": 0.8,
+              "lineWidth": 1.0,
               "colorBy": "burgers_family",
               "propertyColors": {
                 "Other": [
@@ -366,7 +413,12 @@
             "name": "Defect Mesh",
             "icon": "HiCube",
             "results": "defect_mesh.parquet",
-            "iterable": ""
+            "iterable": "",
+            "exportWhen": {
+              "argument": "export_defect_mesh",
+              "operator": "equals",
+              "value": true
+            }
           }
         }
       },
@@ -380,7 +432,10 @@
         "data": {
           "export": {
             "exporter": "MeshExporter",
-            "type": "glb"
+            "type": "glb",
+            "options": {
+              "reverseOrientation": true
+            }
           }
         }
       },
@@ -396,7 +451,12 @@
             "name": "Interface Mesh",
             "icon": "HiCube",
             "results": "interface_mesh.parquet",
-            "iterable": ""
+            "iterable": "",
+            "exportWhen": {
+              "argument": "export_interface_mesh",
+              "operator": "equals",
+              "value": true
+            }
           }
         }
       },
@@ -426,7 +486,12 @@
             "name": "Structure Identification",
             "icon": "HiCube",
             "results": "atoms.parquet",
-            "iterable": ""
+            "iterable": "",
+            "exportWhen": {
+              "argument": "export_structure_identification",
+              "operator": "equals",
+              "value": true
+            }
           }
         }
       },
@@ -456,7 +521,12 @@
             "name": "Crystalline Coherent Regions",
             "icon": "HiCube",
             "results": "coherent_crystalline_regions.parquet",
-            "iterable": ""
+            "iterable": "",
+            "exportWhen": {
+              "argument": "export_coherent_crystalline_regions",
+              "operator": "equals",
+              "value": true
+            }
           }
         }
       },
@@ -487,7 +557,12 @@
             "icon": "HiChartBar",
             "results": "dislocation_summary.parquet",
             "iterable": "",
-            "hasListing": false
+            "hasListing": false,
+            "exportWhen": {
+              "argument": "export_dislocation_network_stats",
+              "operator": "equals",
+              "value": true
+            }
           }
         }
       },
@@ -531,7 +606,12 @@
             "icon": "HiChartBar",
             "results": "dislocation_summary.parquet",
             "iterable": "",
-            "hasListing": false
+            "hasListing": false,
+            "exportWhen": {
+              "argument": "export_dislocation_network_stats",
+              "operator": "equals",
+              "value": true
+            }
           }
         }
       },
@@ -575,7 +655,12 @@
             "icon": "HiChartBar",
             "results": "dislocation_summary.parquet",
             "iterable": "",
-            "hasListing": true
+            "hasListing": true,
+            "exportWhen": {
+              "argument": "export_dislocation_network_stats",
+              "operator": "equals",
+              "value": true
+            }
           }
         }
       }
