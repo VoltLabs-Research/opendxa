@@ -26,6 +26,15 @@ opendxa <input_dump> [output_base] [options]
 | `--circuit_stretchability <int>` | no | `9` | Circuit stretchability factor. |
 | `--line_smoothing_level <float>` | no | `1.0` | Smoothing applied to dislocation lines. |
 | `--line_point_interval <float>` | no | `2.5` | Point spacing along exported lines. |
+| `--export_interface_mesh` | no | off | Write the interface mesh. Currently byte-identical to the defect mesh. |
+| `--export_structure_identification` | no | off | Write per-atom structure identification. |
+| `--export_coherent_crystalline_regions` | no | off | Write coherent crystalline regions. |
+
+The three `--export_*` flags above are off by default and surfaced as checkboxes in
+the analysis configuration. Their outputs are the expensive ones (per-atom tables and
+a second mesh), so nothing writes them unless asked. The remaining exports —
+dislocations, defect mesh and the summary the charts and network statistics read —
+are always on.
 
 ## Exports
 
@@ -33,9 +42,9 @@ opendxa <input_dump> [output_base] [options]
 |---|---|---|
 | `{output_base}_dislocations.parquet` | Dislocations | LineExporter → glb |
 | `{output_base}_defect_mesh.parquet` | Defect Mesh | MeshExporter → glb |
-| `{output_base}_interface_mesh.parquet` | Interface Mesh | MeshExporter → glb |
-| `{output_base}_atoms.parquet` | Structure Identification | AtomisticExporter → glb |
-| `{output_base}_coherent_crystalline_regions.parquet` | Crystalline Coherent Regions | AtomisticExporter → glb |
+| `{output_base}_interface_mesh.parquet` | Interface Mesh | MeshExporter → glb — opt-in |
+| `{output_base}_atoms.parquet` | Structure Identification | AtomisticExporter → glb — opt-in |
+| `{output_base}_coherent_crystalline_regions.parquet` | Crystalline Coherent Regions | AtomisticExporter → glb — opt-in |
 | `{output_base}_dislocation_summary.parquet` | Burgers Segment Counts | ChartExporter → chart-png |
 | `{output_base}_dislocation_summary.parquet` | Burgers Length Distribution | ChartExporter → chart-png |
 | `{output_base}_dislocation_summary.parquet` | Network Statistics | — (listing-only) |
