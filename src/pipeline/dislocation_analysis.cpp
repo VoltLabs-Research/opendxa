@@ -251,7 +251,8 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 outputFile + "_dislocation_summary.parquet",
                 &network,
                 &frame.simulationCell,
-                exportOptions
+                exportOptions,
+                structureAnalysis.get()
             );
         }
 
