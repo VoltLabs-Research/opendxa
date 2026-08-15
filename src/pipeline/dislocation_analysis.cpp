@@ -167,11 +167,20 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     spdlog::info("[{:>6}ms] Delaunay tessellation", elapsed());
 
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
+    // Reported per sub-step, not as one number. "Elastic mapping" used to be a
+    // single line covering four very different jobs, which made it impossible to
+    // tell where its time went — and cost a wasted optimisation: replacing the
+    // label propagation in assignVerticesToClusters() with a frontier BFS measured
+    // 5% *slower* on a 14-grain nanocrystal, because that step was never the
+    // expensive one. Keep the breakdown.
     elasticMap.generateTessellationEdges();
+    spdlog::info("[{:>6}ms]   ... tessellation edges", elapsed());
     elasticMap.assignVerticesToClusters();
+    spdlog::info("[{:>6}ms]   ... vertex-to-cluster labels", elapsed());
     elasticMap.assignIdealVectorsToEdges(false, _crystalPathSteps);
+    spdlog::info("[{:>6}ms]   ... ideal vectors on edges", elapsed());
     elasticMap.shrinkVertexStorage();
-    spdlog::info("[{:>6}ms] Elastic mapping", elapsed());
+    spdlog::info("[{:>6}ms] Elastic mapping (total of the four above)", elapsed());
 
     InterfaceMesh interfaceMesh(elasticMap);
     interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance(), _interfaceAlphaScale);

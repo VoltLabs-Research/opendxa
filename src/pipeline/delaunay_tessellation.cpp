@@ -1,5 +1,6 @@
 #include <volt/core/volt.h>
 #include <volt/pipeline/delaunay_tessellation.h>
+#include <volt/core/runtime_budget.h>
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
@@ -187,17 +188,31 @@ void DelaunayTessellation::generateTessellation(
 		_pointData.size(), _primaryVertexCount, _pointData.size() - _primaryVertexCount);
 
 	const char* backend = "BDEL";
+	unsigned int delaunayThreads = 1;
 #ifdef VOLT_HAVE_PARALLEL_DELAUNAY
 	if(_maxDelaunayThreads != 1){
-		unsigned int hw = std::thread::hardware_concurrency();
-		if(hw == 0){ hw = 1; }
+		// Derive from the process CPU budget, not from hardware_concurrency.
+		//
+		// geogram's parallel backend runs on OpenMP, so the TBB global_control that
+		// --threads used to set could never reach it — and setMaxDelaunayThreads()
+		// had zero callers in the whole repository, leaving _maxDelaunayThreads at 0
+		// and this branch taking min(nproc, 16) unconditionally. Measured before the
+		// fix, 256k atoms: `--threads 1` still burned 221% CPU, and the Delaunay
+		// stage moved only 524 -> 502 ms between 1 and 16 threads because it was
+		// running with 16 either way. With the daemon launching up to (nproc - 1) of
+		// these processes at once, that was an entire second uncontrolled pool per
+		// process.
+		const unsigned int budget = static_cast<unsigned int>(std::max(1, Runtime::threadBudget()));
 		unsigned int threads = (_maxDelaunayThreads > 0)
 			? static_cast<unsigned int>(_maxDelaunayThreads)
-			: std::min(hw, kDefaultMaxDelaunayThreads);
-		threads = std::max(1u, std::min(threads, hw));
+			: std::min(budget, kDefaultMaxDelaunayThreads);
+		// The cap stays: PDEL's commit/rollback contention grows with thread count,
+		// and the original report of it spinning came from a 160-core EPYC.
+		threads = std::max(1u, std::min(threads, budget));
 		if(threads > 1){
 			GEO::Process::set_max_threads(threads);
 			backend = "PDEL";
+			delaunayThreads = threads;
 		}
 	}
 #endif
@@ -211,7 +226,8 @@ void DelaunayTessellation::generateTessellation(
 	_dt->set_reorder(true);
 	_dt->set_vertices(_pointData.size(), reinterpret_cast<const double*>(_pointData.data()));
 
-	spdlog::info("  Geogram Delaunay ({}) complete: {} cells", backend, _dt->nb_cells());
+	spdlog::info("  Geogram Delaunay ({}, {} threads) complete: {} cells",
+		backend, delaunayThreads, _dt->nb_cells());
 
 	// Classify cells (parallel)
 	const size_t numCells = _dt->nb_cells();
