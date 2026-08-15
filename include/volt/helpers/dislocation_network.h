@@ -80,12 +80,10 @@ struct DislocationSegment{
 
 	DislocationSegment(const ClusterVector& b, DislocationNode* forward, DislocationNode* backward)
 		: id(-1), burgersVector(b), replacedWith(nullptr){
-		//assert(b.localVec() != Vector3::Zero());
 
 		nodes[0] = forward;
 		nodes[1] = backward;
 
-		// Primero asigna punteros
 		forward->segment = this;
 		forward->oppositeNode = backward;
 		forward->junctionRing = forward;
@@ -147,8 +145,6 @@ inline ClusterVector DislocationNode::burgersVector() const{
 	return isForwardNode() ? segment->burgersVector : -segment->burgersVector;
 }
 
-/// Returns the position of the node by looking up the coordinates of the
-/// start or end point of the dislocation segment to which the node belongs.
 inline const Point3& DislocationNode::position() const{
 	return isForwardNode() ? segment->line.back() : segment->line.front();
 }

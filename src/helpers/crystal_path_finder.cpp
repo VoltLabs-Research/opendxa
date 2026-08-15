@@ -3,23 +3,18 @@
 
 namespace Volt{
 
-// Finds an atom-to-atom path from atom 1 to atom 2 that lies entirely in the good
-// crystal region. Returns true if a path could be found and stores the corresponding ideal
-// vector and the cluster transition in the provided pass-by-reference variables.
 std::optional<ClusterVector> CrystalPathFinder::findPath(int atomIndex1, int atomIndex2){
     assert(atomIndex1 != atomIndex2);
 
     auto* cluster1 = structureAnalysis().atomCluster(atomIndex1);
     auto* cluster2 = structureAnalysis().atomCluster(atomIndex2);
 
-    // Test if atom 2 is a direct neighbor of atom 1
     if(cluster1->id != 0){
         if(int ni = structureAnalysis().findNeighbor(atomIndex1, atomIndex2); ni >= 0){
             const auto& v = structureAnalysis().neighborLatticeVector(atomIndex1, ni);
             return ClusterVector{v, cluster1};
         }
     }else if(cluster2->id != 0){
-        // Test if atom 1 is a direct neighbor of atom 2
         if(int ni = structureAnalysis().findNeighbor(atomIndex2, atomIndex1); ni >= 0){
             const auto& v = structureAnalysis().neighborLatticeVector(atomIndex2, ni);
             return ClusterVector{-v, cluster2};
@@ -34,10 +29,8 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(int atomIndex1, int ato
     PathNode start{atomIndex1, ClusterVector{Vector3::Zero(), nullptr}};
     start.distance = 0;
 
-    // Mark the head atom as visited
     _visitedAtoms.set(atomIndex1);
 
-    // Process items from queue until it becomes empty or the destination atom has been reached.
     PathNode* tail = &start;
     std::optional<ClusterVector> result;
 
@@ -81,7 +74,6 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(int atomIndex1, int ato
 				}
             }
 
-            // Build path vector
             auto pathVec = cur->idealVector;
             if(pathVec.cluster() == step.cluster()){
                 pathVec.localVec() += step.localVec();
@@ -101,7 +93,6 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(int atomIndex1, int ato
                 break;
             }
 
-            // Enqueue for BFS
             if(cur->distance < _maxPathLength - 1){
                 auto* node = _nodePool.construct(nb, pathVec);
                 node->distance = cur->distance + 1;

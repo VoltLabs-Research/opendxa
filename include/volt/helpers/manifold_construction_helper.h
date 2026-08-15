@@ -79,7 +79,6 @@ private:
 					if(auto res = _tessellation.alphaTest(cell, _alpha)){
 						filled = *res;
 					}else{
-						// sliver test
 						int f = 0;
 						for(; f < 4; ++f){
 							auto nbr = _tessellation.mirrorFacet(cell, f).first;
@@ -94,7 +93,6 @@ private:
 			}
 		});
 
-		// Parallel region assignment
 		std::vector<int> regions(cells.size(), 0);
 		tbb::parallel_for(tbb::blocked_range<size_t>(0, cells.size(), 4096),
 			[&](const tbb::blocked_range<size_t>& r){
@@ -104,7 +102,6 @@ private:
 			}
 		});
 
-		// Serial commit (cheap: only writes fields, no computation)
 		for(size_t i = 0; i < cells.size(); ++i){
 			auto cell = cells[i];
 			_tessellation.setUserField(cell, regions[i]);
@@ -150,7 +147,6 @@ private:
 			std::array<int, 3> vertexIndices;
 		};
 
-		// Phase 1: Collect active cells (parallel filter)
 		const size_t totalCells = _tessellation.numberOfTetrahedra();
 
 		std::vector<uint8_t> isActive(totalCells, 0);
@@ -169,7 +165,6 @@ private:
 				activeCellIndices.push_back(static_cast<uint32_t>(cellIdx));
 		}
 
-		// Phase 2: Find all interface facets (one big parallel pass)
 		tbb::concurrent_vector<FacetCandidate> allCandidates;
 		allCandidates.reserve(activeCellIndices.size());
 
@@ -201,7 +196,6 @@ private:
 			}
 		});
 
-		// Phase 3: Serial commit (only interface faces, not all 52M cells)
 		_faceLookupMap.reserve(allCandidates.size());
 		for(const auto& candidate : allCandidates){
 			std::array<typename HalfEdgeStructureType::Vertex*, 3> facetVertices{};

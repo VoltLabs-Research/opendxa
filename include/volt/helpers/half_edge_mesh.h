@@ -52,7 +52,6 @@ public:
 
         void linkToOppositeEdge(Edge* other) noexcept{
             if(!other) return;
-            //assert(!_oppositeEdge && !other->_oppositeEdge);
             _oppositeEdge = other;
             other->_oppositeEdge = this;
         }
@@ -257,7 +256,6 @@ public:
     }
 
     void smoothVertices(int iterations){
-        // TODO: parallelFor
         if(iterations <= 0) return;
 
         double lambda = 0.5;
