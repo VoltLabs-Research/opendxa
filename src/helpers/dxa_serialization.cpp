@@ -44,10 +44,6 @@ struct BurgersFamilyMatch{
 
 constexpr BurgersFamilyMatch OTHER_BURGERS_FAMILY{"Other", "Other"};
 
-// Burgers vectors arrive in the cluster lattice frame defined by the reference
-// lattice YAMLs (lattices/*.yml): cubic lattices use the conventional cubic cell
-// with unit lattice constant, so prototypes are exact lattice-fraction vectors.
-// Cubic matching is permutation/sign invariant (sorted absolute components).
 struct CubicBurgersFamily{
     std::array<double, 3> sortedAbsComponents;
     BurgersFamilyMatch family;
@@ -73,10 +69,6 @@ const CubicBurgersFamily SC_BURGERS_FAMILIES[] = {
     {{1.0, 1.0, 1.0}, {"<111>", "<111>"}}
 };
 
-// The hexagonal reference frame (lattices/hcp.yml, hex_diamond.yml) keeps the
-// c axis along z with the FCC-equivalent length scale: in-plane nearest
-// neighbor distance a = 1/sqrt(2), ideal c = 2*sqrt(2/3)*a. Families are
-// rotation invariant about c, so they match on (basal, axial) magnitudes.
 struct HexagonalBurgersFamily{
     double basalLength;
     double axialLength;
@@ -217,7 +209,7 @@ std::array<std::uint64_t, 3> canonicalFaceKey(
     return key;
 }
 
-}  // namespace Detail
+}
 
 using namespace Detail;
 
@@ -235,23 +227,19 @@ void clipDislocationLine(
     if(line.size() < 2) return;
     bool isInitialSegment = true;
 
-    // initialize the first point and the shift vector
     auto v1Iter = line.cbegin();
     Point3 rp1 = simulationCell.absoluteToReduced(*v1Iter);
     Vector3 shiftVector = Vector3::Zero();
     for(size_t dimension = 0; dimension < 3; dimension++){
         if(simulationCell.pbcFlags()[dimension]){
-            // move the start point to the main box [0,1) and record the offset
             double shift = -std::floor(rp1[dimension]);
             rp1[dimension] += shift;
             shiftVector[dimension] += shift;
         }
     }
 
-    // iterate over the original line segments
     for(auto v2Iter = v1Iter + 1; v2Iter != line.cend(); v1Iter = v2Iter, ++v2Iter){
         Point3 rp2 = simulationCell.absoluteToReduced(*v2Iter) + shiftVector;
-        // ugly hack
         int maxIterations = 10;
         int iterationCount = 0;
         do{
@@ -270,7 +258,6 @@ void clipDislocationLine(
             double smallestT = std::numeric_limits<double>::max();
             for(size_t dimension = 0; dimension < 3; dimension++){
                 if(simulationCell.pbcFlags()[dimension]){
-                    // crossing detection
                     int d = (int) std::floor(rp2[dimension]) - (int) std::floor(rp1[dimension]);
                     if(d == 0) continue;
 
@@ -287,7 +274,6 @@ void clipDislocationLine(
                 }
             }
 
-            // tolerance to avoid very small intersections
             if(smallestT < (1.0 - 1e-9)){
                 Point3 intersection = rp1 + smallestT * (rp2 - rp1);
                 intersection[crossDim] = std::round(intersection[crossDim]);
@@ -298,7 +284,6 @@ void clipDislocationLine(
                 rp2[crossDim] -= crossDir;
                 isInitialSegment = true;
             }else{
-                // no more intersections for this segment
                 segmentCallback(simulationCell.reducedToAbsolute(rp1), simulationCell.reducedToAbsolute(rp2), isInitialSegment);
                 isInitialSegment = false;
                 break;
@@ -312,7 +297,6 @@ void streamDelaunayTessellationToFile(
     const std::string& filePath,
     const DelaunayTessellation& tessellation
 ){
-    // Pass 1: collect unique vertices and faces
     std::unordered_map<std::uint64_t, int> vertexMap;
     std::vector<Point3> exportPoints;
     std::set<std::array<std::uint64_t, 3>> exportedFaces;
@@ -346,7 +330,6 @@ void streamDelaunayTessellationToFile(
         }
     }
 
-    // Pass 2: build JSON document and persist as Parquet payload.
     json points = json::array();
     for(size_t i = 0; i < exportPoints.size(); ++i){
         points.push_back({
@@ -380,7 +363,6 @@ void streamCoherentCrystallineRegionsToFile(
 ){
     const StructureContext& context = structureAnalysis.context();
 
-    // Pass 1: group atoms by cluster
     std::map<int, std::vector<std::size_t>> atomIndicesByCluster;
     int unassignedAtoms = 0;
     for(std::size_t i = 0; i < context.atomCount(); ++i){
@@ -394,9 +376,8 @@ void streamCoherentCrystallineRegionsToFile(
         largestRegionSize = std::max(largestRegionSize, static_cast<int>(indices.size()));
 
     const int assignedAtoms = static_cast<int>(context.atomCount()) - unassignedAtoms;
-    const int baseAtomFields = 7; // id, pos, structure_id, structure_type, structure_name, cluster_id, topology_name (optional)
+    const int baseAtomFields = 7;
 
-    // Pass 2: build JSON document and persist as Parquet payload.
     (void)baseAtomFields;
     json regions = json::array();
     json atomisticExporter = json::object();
@@ -617,8 +598,6 @@ int countDanglingSegments(const DislocationNetwork* network){
     return dangling;
 }
 
-// ============ STREAMING EXPORT ============
-
 BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure){
     const BurgersFamilyMatch match = Detail::classifyBurgersFamily(localBurgers, crystalStructure);
     return BurgersFamily{match.name, match.label};
@@ -639,7 +618,6 @@ void streamDislocationsToFile(
         if(seg && !seg->isDegenerate()) validSegments.push_back(seg);
     }
 
-    // Pre-compute all chunks to know counts for headers
     struct Chunk{
         std::vector<Point3> points;
         double length;
@@ -659,10 +637,6 @@ void streamDislocationsToFile(
     double maxLength = 0, minLength = std::numeric_limits<double>::max();
     std::map<std::string, std::pair<int, double>> burgersSummary;
 
-    // Aggregated by family rather than by chart key: the charts keep every distinct
-    // unclassified vector separate, but the results table wants the single "Other" row
-    // OVITO shows, and it needs the family name unmodified so a viewer can look up the
-    // colour the plugin declared for it.
     struct FamilyTally {
         std::string label;
         int segmentCount = 0;
@@ -692,8 +666,6 @@ void streamDislocationsToFile(
             const BurgersFamilyMatch family = Detail::classifyBurgersFamily(c.burgersLocal, c.crystalStructure);
             c.burgersFamily = family.name;
             c.burgersFamilyLabel = family.label;
-            // Unclassified vectors keep the numeric label so distinct "Other"
-            // vectors stay distinguishable in the charts.
             const std::string summaryKey = c.burgersFamily != "Other"
                 ? c.burgersFamilyLabel
                 : burgersVectorLabel(c.burgersLocal);
@@ -731,9 +703,6 @@ void streamDislocationsToFile(
     }
     if(chunks.empty()) minLength = 0;
 
-    // One row per segment in the standard line entity table (id, points,
-    // per-segment property columns). VOLT discovers, queries and styles these
-    // properties generically — no dislocation knowledge outside this plugin.
     auto vecAsList = [](const Vector3& v){ return std::vector<double>{v.x(), v.y(), v.z()}; };
     auto pointAsList = [](const Point3& p){ return std::vector<double>{p.x(), p.y(), p.z()}; };
     streamLinesToParquet(
@@ -756,8 +725,6 @@ void streamDislocationsToFile(
         }
     );
 
-    // Network-level statistics and chart data ride a separate JSON-payload
-    // summary file; they are plugin-specific aggregates, not line entities.
     json burgersLabels = json::array(), segmentCounts = json::array(), burgersLengths = json::array();
     for(const auto& [label, s] : burgersSummary){
         burgersLabels.push_back(label);
@@ -788,9 +755,6 @@ void streamDislocationsToFile(
     if(options.exportJunctions)
         subListings["junction_information"] = getJunctionInformation(network);
 
-    // The two tables OVITO puts beside this modifier. `burgers_family` is the key the
-    // plugin also declares colours for in plugin.json, so a row and the line it counts
-    // resolve to the same colour; the daemon does not need to know what a family is.
     json burgersFamilies = json::array();
     for(const auto& [familyName, tally] : familySummary){
         burgersFamilies.push_back({
@@ -843,7 +807,6 @@ void streamMeshToFile(
     const auto& originalFaces = mesh.faces();
     const auto& cell = structureAnalysis.context().simCell;
 
-    // Pre-compute export data (positions + face indices with PBC unwrapping)
     std::vector<Point3> exportPoints;
     exportPoints.reserve(originalVertices.size());
     std::vector<int> originalToExportMap(originalVertices.size());
@@ -879,7 +842,6 @@ void streamMeshToFile(
         exportFaces.push_back(newFaceVerts);
     }
 
-    // Build JSON document and persist as Parquet payload.
     json points = json::array();
     for(size_t i = 0; i < exportPoints.size(); ++i){
         points.push_back({

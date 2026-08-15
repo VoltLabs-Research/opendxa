@@ -84,7 +84,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             _metricRescaleX, _metricRescaleY, _metricRescaleZ
         );  
 
-        // Rescale atom positions in place.
         Point3* pos = positions->dataPoint3();
         const std::size_t n = positions->size();
         for(std::size_t i = 0; i < n; i++){
@@ -95,8 +94,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             );
         }
 
-        // Rescale the simulation cell (columns = cell vectors, column 3 = origin) so the
-        // PBC wrapping in the isotropized frame stays consistent
         AffineTransformation cellMatrix = frame.simulationCell.matrix();
         for(int col = 0; col < 4; col++){
             cellMatrix(0, col) /= _metricRescaleX;
@@ -124,15 +121,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     spdlog::info("[{:>6}ms] Structure reconstruction", elapsed());
 
     if(metricRescaleActive){
-        // The ideal lattice vectors (neighbor_lattice_*) were produced in the physical
-        // (ansiotropic) frame. The tetrahedron compatibility tests (isElasticMappingCompatible)
-        // and the Burgers sum use an absolute tolerance (CA_LATTICE_VECTOR_EPSILON) tuned 
-        // for ~unit-magnitude ideal vectors; ansiotropic vectors of magnitude ~a, b, c break those
-        // checks so every good tetahedron is rejected.
-        // Rescale the ideal vectors by (1/sx, 1/sy, 1/sz) into the same isotropized 
-        // frame as the positions so the whole circuit machinery is self-consistent. 
-        // The traced Burgers vector then comes out in isotropized lattice units; 
-        // multiply its components by (sx, sy, sz) to recover physical Angstrom.
         if(structureAnalysis->hasNeighborLatticeVectorOverrides()){
             std::vector<Vector3> overrides = structureAnalysis->neighborLatticeVectorOverrides();
             const std::size_t stride= structureAnalysis->neighborLatticeVectorOverrideStride();
@@ -146,9 +134,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
 
             structureAnalysis->setNeighborLatticeVectorOverrides(std::move(overrides), stride);
 
-            // The contract's maxNeighborDistance is in physical units; isotropize
-            // it to match the rescaled positions/overrides so the ghost layer and
-            // alpha-shape thresholds stay consistent in the analysis frame.
             const double smax = std::max({_metricRescaleX, _metricRescaleY, _metricRescaleZ});
             context.maximumNeighborDistance /= smax;
         }
@@ -167,12 +152,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     spdlog::info("[{:>6}ms] Delaunay tessellation", elapsed());
 
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
-    // Reported per sub-step, not as one number. "Elastic mapping" used to be a
-    // single line covering four very different jobs, which made it impossible to
-    // tell where its time went — and cost a wasted optimisation: replacing the
-    // label propagation in assignVerticesToClusters() with a frontier BFS measured
-    // 5% *slower* on a 14-grain nanocrystal, because that step was never the
-    // expensive one. Keep the breakdown.
     elasticMap.generateTessellationEdges();
     spdlog::info("[{:>6}ms]   ... tessellation edges", elapsed());
     elasticMap.assignVerticesToClusters();
@@ -200,10 +179,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     DislocationNetwork& network = tracer.network();
     spdlog::info("Found {} dislocation segments", network.segments().size());
 
-    // Derive the defect mesh here, not down in the export block: the caps are anchored at the
-    // dangling nodes' line endpoints, and both the metric rescale and the smoothing below
-    // rewrite segment->line in place. Running after either of them would place the caps in a
-    // different frame than the mesh vertices they are stitched to.
     InterfaceMeshTopology defectMesh;
     const bool needDefectMesh = _exportDefectMesh && !outputFile.empty();
     if(needDefectMesh){
@@ -242,8 +217,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 true
             );
 
-            // Roughly a second copy of the interface mesh; release it before the remaining
-            // exports rather than holding it until the end of the function.
             defectMesh.clear();
         }
 

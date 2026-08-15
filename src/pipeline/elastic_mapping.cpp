@@ -17,14 +17,6 @@ static constexpr std::array<std::pair<int, int>, 6> tetraEdgeVertices{{
     {1, 2}, {1, 3}, {2, 3}
 }};
 
-// In order to measure how each tetrahedron in our Delaunay mesh connects
-// two atoms across the grain boundary, we talk every tetrahedral cell and record each
-// of its six edges exactly once. We skip any "ghost" cells that lie outside the
-// real simulation box. For each real edge, we look up the two vertex IDs (v1, v2),
-// skip degenerate or wrapped edges, and then build a TessellationEdge object if that
-// connection has not already been recorded. Each new edge is inserted into two linked
-// lists: one at its source vertex (edges leaving) and one at its destination vertex
-// (edges arriving), so that we can later traverse all edges adjacent to any given vertex.
 void ElasticMapping::generateTessellationEdges(){
     const auto &simCell = structureAnalysis().context().simCell;
     _edges.clear();
@@ -62,7 +54,6 @@ void ElasticMapping::generateTessellationEdges(){
 
                 int minV = std::min(v1, v2);
                 int maxV = std::max(v1, v2);
-                // Pack (minV, maxV) into one sortable key.
                 const uint64_t key = (uint64_t{static_cast<uint32_t>(minV)} << 32) |
                                      uint64_t{static_cast<uint32_t>(maxV)};
                 edgeKeys.push_back(key);
@@ -119,20 +110,9 @@ void ElasticMapping::generateTessellationEdges(){
     }
 }
 
-// Once we have a graph of edges connecting mesh vertices, we need to assign
-// each vertex to the grain (cluster) it belongs to.
-// Initially, vertices that coincide exactly with an atomic cluster
-// center get that cluster's ID; other vertices start with zero.
-// In a simple propagation loop, we look at each unassigned vertex and check
-// its neighboring vertices (both edges leaving and arriving).
-// As soon as it touches a vertex already assigned to a nonzero cluster,
-// we adopt that cluster ID. We repeat the scan until no changes occur,
-// so that every vertex on the interface inherits the grain identity
-// from at lesat one of its neighbors.
 void ElasticMapping::assignVerticesToClusters(){
     const size_t vertex_count = _vertexClusters.size();
     
-    // Initial assignment (can be parallel since each vertex is independent)
     tbb::parallel_for(tbb::blocked_range<size_t>(0, vertex_count),
         [this](const tbb::blocked_range<size_t>& r){
             for(size_t i = r.begin(); i < r.end(); ++i){
@@ -188,17 +168,6 @@ void ElasticMapping::assignVerticesToClusters(){
     }while(changed);
 }
 
-// With every mesh edge now knowing the grain ID of its two endpoints, we want to compute
-// an "ideal" Burgers vector on each edge so that when we later trace dislocation loops
-// we know how the lattice would distort ideally between the two grains.
-// We instantiate a helper class, CrystalPatFinder, which can find a lattice-aligned path
-// between two atomic sites. For each edge that doesn't already have a vector, we check
-// that both its vertices belong to valid clusters. We the ask the path finder for the 
-// ideal vector and the grain where that vector originates. If necessary, we apply the inverse
-// of the transition that brough that vector from its source cluster into the first cluster,
-// then compose with the transition from the first cluster to the second. The final result
-// is stored on the edge so that later elastic compatibility checks can 
-// verify closed-loops balances.
 void ElasticMapping::assignIdealVectorsToEdges(bool reconstructEdgeVectors, int crystalPathSteps){
     tbb::parallel_for(tbb::blocked_range<size_t>(0, _vertexEdges.size()), [&](const tbb::blocked_range<size_t>& r){
         (void)reconstructEdgeVectors;
@@ -235,19 +204,9 @@ void ElasticMapping::assignIdealVectorsToEdges(bool reconstructEdgeVectors, int 
     });
 }
 
-// Before accepting the elastic mapping as valid for simulation or further analysis
-// we must confirm that every tetrahedron's six edges close consistently. That means each
-// triangular face in the tetrahedron must satisfy both:
-// 1) The sum of Burgers vectors around that triange is zero.
-// 2) Any lattice symmetry transitions across those edges combine to the identity rotation.
-// We extract each of the four unique 3-edge circuits on the tetrahedron, transform
-// and sum their stored vectors, and test for zero magnitude.
-// We likewise compose their transition matrices and confirm no net rotation.
-// If any check fails, the mapping is compatible and we return false.
 bool ElasticMapping::isElasticMappingCompatible(DelaunayTessellation::CellHandle cell) const{
     if(!tessellation().isValidCell(cell)) return false;
 
-    // Gather each of the six edge's vector and transition
     std::array<std::pair<Vector3, ClusterTransition*>, 6> edgeVecs;
     for(int i = 0; i < 6; ++i){
         auto [vi, vj] = tetraEdgeVertices[i];
@@ -255,16 +214,13 @@ bool ElasticMapping::isElasticMappingCompatible(DelaunayTessellation::CellHandle
         int v2 = tessellation().vertexIndex(tessellation().cellVertex(cell, vj));
         auto* te = findEdge(v1, v2);
 
-        // Every edge must exist and have a stored vector
         if(!te || !te->hasClusterVector()){
             return false;
 		}
 
-        // Make sure the vector is always oriented from v1 to v2
         if(te->vertex1 == v1){
             edgeVecs[i] = { te->clusterVector, te->clusterTransition };
         }else{
-            // If reversed, invert the vector and use the reverse transition
             edgeVecs[i] = {
                 te->clusterTransition->transform(-te->clusterVector),
                 te->clusterTransition->reverse
@@ -272,12 +228,10 @@ bool ElasticMapping::isElasticMappingCompatible(DelaunayTessellation::CellHandle
         }
     }
 
-    // Define four triangular loops on a tetrahedron by edge indices
     static constexpr std::array<std::array<int, 3>, 4> circuits{{
         {{0, 4, 2}}, {{1, 5, 2}}, {{0, 3, 1}}, {{3, 5, 4}}
     }};
 
-    // Check that the vector sum around each triangle is zero
     for(auto const& c : circuits){
         Vector3 B = edgeVecs[c[0]].first
                   + edgeVecs[c[0]].second->reverseTransform(edgeVecs[c[1]].first)
@@ -286,7 +240,6 @@ bool ElasticMapping::isElasticMappingCompatible(DelaunayTessellation::CellHandle
 		if(!B.isZero(CA_LATTICE_VECTOR_EPSILON)) return false;
     }
 
-    // Check that the combine rotations around each triangle are identity
     for(auto const& c : circuits){
         auto* t1 = edgeVecs[c[0]].second;
         auto* t2 = edgeVecs[c[1]].second;

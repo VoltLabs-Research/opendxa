@@ -21,21 +21,12 @@ struct DislocationsExportOptions{
     bool exportJunctions = true;
 };
 
-// Burgers-vector family classification in the cluster lattice frame. Public so
-// downstream plugins (line-reconstruction-dxa) classify their own segments —
-// family knowledge lives in the plugins, not in VOLT or the daemon.
 struct BurgersFamily{
-    std::string name;   // e.g. "1/2<110>"
-    std::string label;  // e.g. "1/2<110> (Perfect)"
+    std::string name;
+    std::string label;
 };
 BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure);
 
-// Streaming export — one row per dislocation segment in the standard VOLT line
-// entity table (id, points, per-segment property columns), plus a separate
-// JSON-payload summary file carrying network statistics and chart data.
-// `structureAnalysis`, when given, adds the per-structure tally to the summary file.
-// That is the second table OVITO shows beside this modifier ("Structure analysis
-// results"), and the counts only exist on the analysis object, not on the network.
 void streamDislocationsToFile(
     const std::string& linesFilePath,
     const std::string& summaryFilePath,
@@ -45,18 +36,11 @@ void streamDislocationsToFile(
     const StructureAnalysis* structureAnalysis = nullptr
 );
 
-// Whole-mesh classification produced by InterfaceMesh::createMesh. It describes the interface
-// mesh only, so the defect mesh — which is a filtered copy of it — omits the block instead of
-// repeating a verdict that does not apply to it.
 struct InterfaceMeshFlags{
     bool isCompletelyGood;
     bool isCompletelyBad;
 };
 
-// Serializes either DXA surface (interface mesh or defect mesh) to the standard mesh payload:
-// export.MeshExporter for the 3D renderer, sub_listings for the daemon's tabular listing
-// reader, plus an optional topology block. Takes the topology base type so the defect mesh,
-// which is not an InterfaceMesh, goes through the same path.
 void streamMeshToFile(
     const std::string& filePath,
     const InterfaceMeshTopology& mesh,

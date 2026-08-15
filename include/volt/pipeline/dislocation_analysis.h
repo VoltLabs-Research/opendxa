@@ -103,14 +103,6 @@ public:
         _coverDomainWithFiniteTets = coverDomainWithFiniteTets;
     }
 
-    // Affine metric pre-conditioning (isotropization).
-    // For strongly ansiotropic crystals (a != b != c), the Delaunay tessellation
-    // of the physical point cloud becomes degenerate along the long axis, so no
-    // Burgers circuit can close. Setting a per-axis rescale (sa, sb, sc) makes DXA build
-    // the tessellation in an isotropized frame (positions / s) where the lattice is
-    // (near-)cubic; the ideal lattice vectors that determine the Burgers vector are
-    // untouched, so b = sum(deltaX) comes out correct in lattice units. 
-    // Exported line geometry is rescale back to physical coordiantes by (sa, sb, sc).
     void setMetricRescale(double sa, double sb, double sc){
         _metricRescaleX = sa;
         _metricRescaleY = sb;

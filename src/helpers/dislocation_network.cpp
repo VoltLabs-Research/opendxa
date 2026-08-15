@@ -5,14 +5,9 @@
 
 namespace Volt{
 
-// Reconstruct an independent copy of an existing DislocationNetwork by duplicating
-// each segment's Burger vector, line geometry, and connection information.
-// Any segment that were linked together via junctions are re-wired in the new network
-// to preserve topological continuity.
 DislocationNetwork::DislocationNetwork(const DislocationNetwork& other): _clusterGraph(other._clusterGraph){
 	_segments.reserve(other._segments.size());
 
-	// Copy each segment's core data and assign the same numeric ID
 	for(const auto *oldSegment : other.segments()){
 		assert(oldSegment->replacedWith == nullptr);
 		assert(oldSegment->id == static_cast<int>(_segments.size()));
@@ -24,8 +19,6 @@ DislocationNetwork::DislocationNetwork(const DislocationNetwork& other): _cluste
 		assert(newSegment->id == oldSegment->id);
 	}
 
-	// Re-stablish junction links between dangling ndoes so that segments
-	// that met in the original network still meet here.
 	for(size_t segmentIndex = 0; segmentIndex < other.segments().size(); ++segmentIndex){
 		const auto *oldSegment = other.segments()[segmentIndex];
 		auto *newSegment = _segments[segmentIndex];
@@ -42,8 +35,6 @@ DislocationNetwork::DislocationNetwork(const DislocationNetwork& other): _cluste
 	}
 }
 
-// Allocates a new dislocation segment with the given Burgers vector, creates
-// its two end nodes and assigns a unique incremental segment ID.
 DislocationSegment* DislocationNetwork::createSegment(const ClusterVector& burgersVector){
 	tbb::spin_mutex::scoped_lock lock(_segmentsMutex);
 	DislocationNode *forwardNode = _nodePool.construct();
@@ -56,8 +47,6 @@ DislocationSegment* DislocationNetwork::createSegment(const ClusterVector& burge
 	return segment;
 }
 
-// Removes a segment from the network's list. The segment pointer
-// must exist, otherwise an assertion is triggered.
 void DislocationNetwork::discardSegment(DislocationSegment* segment){
 	assert(segment != nullptr);
 	const auto it = std::ranges::find(_segments, segment);
@@ -65,10 +54,6 @@ void DislocationNetwork::discardSegment(DislocationSegment* segment){
 	_segments.erase(it);
 }
 
-// Applies a two-step process to each segment curve. Coarsening to reduce
-// the number of points based on core size and a user-specified interval, then smoothing
-// the result with repeated Laplacian passes to remove sharp kinks. 
-// Closed loops are handled differently from open lines so as not to break continuity.
 void DislocationNetwork::smoothDislocationLines(double lineSmoothingLevel, double linePointInterval){
 	const auto& segmentList = segments();
 	tbb::parallel_for(tbb::blocked_range<size_t>(0, segmentList.size(), 128),
@@ -91,17 +76,11 @@ void DislocationNetwork::smoothDislocationLines(double lineSmoothingLevel, doubl
 			smoothDislocationLine(lineSmoothingLevel, line, segment->isClosedLoop());
 			segment->line = std::move(line);
 
-			// coreSize is no longer needed at render time
 			segment->coreSize.clear();
 		}
 	});
 }
 
-// Reduces the number of points along a segment by averaging over intervals
-// determined by the local core size and the desired spacing. Infinite lines
-// and very short segments recive special handling to preserve key features
-// or collapse into a straight line when the ratio of size versus length 
-// exceeds a threshold.
 void DislocationNetwork::coarsenDislocationLine(
     double linePointInterval,
     const std::vector<Point3>& input,
@@ -114,7 +93,6 @@ void DislocationNetwork::coarsenDislocationLine(
 	if(input.size() < 2){
 		return;
 	}
-    // assert(input.size() == coreSize.size());
 
     if(linePointInterval <= 0 || input.size() < 4){
         output = input;
@@ -190,57 +168,42 @@ void DislocationNetwork::coarsenDislocationLine(
     }
 }
 void DislocationNetwork::smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, bool isLoop){
-    // If anti-aliasing is off or the line is too short to anti-alias, do nothing.
 	if(smoothingLevel <= 0 || line.size() <= 2){
 		return;
 	}
 
-	// Do not smooth closed loops that are very small (e.g. a triangle or a square)
 	if(isLoop && line.size() <= 4){
 		return;
 	}
 
-	// Smoothing parameters (two-pass lambda/mu scheme to avoid shrinkage)
-	// These are standard parameters in Laplacian smoothing.
     const double lambda = 0.5;
     const double mu = -0.53; 
     const double prefactors[2] = { lambda, mu };
     
     std::vector<Vector3> laplacians(line.size());
 
-    // The 'smoothingLevel' controls the number of iterations. More iterations = smoother.
 	for(int iteration = 0; static_cast<double>(iteration) < smoothingLevel; ++iteration){
-		// Two passes are applied per iteration: one that contracts (lambda) and one that expands (mu).
         for(int pass = 0; pass < 2; ++pass){
 			
-            // Calculate the Laplacian vectors for each point.
-			// The Laplacian of a point is the difference between the average of its neighbors and the point itself.
 			for(size_t i = 0; i < line.size(); ++i){
-				// For open lines, the endpoints do not move to maintain connections.
                 if(!isLoop && (i == 0 || i == line.size() - 1)){
 					laplacians[i].setZero();
 					continue;
 				}
 
-                // For closed loops, the neighbor before the first is the second to last.
 				const Point3& p_prev = (i == 0) ? line[line.size() - 2] : line[i - 1];
 				const Point3& p_curr = line[i];
-                // The next neighbor to the last is the second (the first is repeated at the end).
 				const Point3& p_next = (i == line.size() - 1) ? line[1] : line[i + 1];
 
                 laplacians[i] = 0.5 * ((p_prev - p_curr) + (p_next - p_curr));
 			}
 
-			// Move each point a fraction of its Laplacian.
 			for(size_t i = 0; i < line.size(); ++i){
 				line[i] += prefactors[pass] * laplacians[i];
 			}
 		}
 	}
 }
-// Given a polyline, returns the point at fractional arc-length t (0 ... 1) by walking
-// along the segments and interpolating linearly when the accumulated length exceeds the 
-// target. If the line is degenerate or empty, returns the origin.
 [[nodiscard]] Point3 DislocationSegment::getPointOnLine(double t) const{
 	if(line.empty() || isDegenerate()){
 				return Point3::Origin();
