@@ -13,9 +13,11 @@
 
 #include <spdlog/spdlog.h>
 
+#include <algorithm>
 #include <memory>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 #include <chrono>
 
 namespace Volt{
@@ -34,6 +36,7 @@ DislocationAnalysis::DislocationAnalysis()
       _exportInterfaceMesh(false),
       _exportDelaunayTessellation(false),
       _exportStructureIdentification(false),
+      _markCoreAtoms(false),
       _exportCoherentCrystallineRegions(false),
       _exportDislocations(true),
       _exportCircuitInformation(true),
@@ -172,9 +175,20 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         static_cast<int>(_maxTrialCircuitSize),
         static_cast<int>(_circuitStretchability)
     );
+    tracer.setMarkCoreAtoms(_markCoreAtoms);
     tracer.traceDislocationSegments();
     tracer.finishDislocationSegments(_referenceTopologyName);
     spdlog::info("[{:>6}ms] Burgers loop tracing", elapsed());
+
+    std::vector<int> coreAtomDislocationIds;
+    if(_markCoreAtoms){
+        coreAtomDislocationIds = tracer.coreAtomDislocationIds(structureAnalysis->context().atomCount());
+        const auto markedAtoms = std::count_if(
+            coreAtomDislocationIds.begin(), coreAtomDislocationIds.end(),
+            [](int id){ return id >= 0; }
+        );
+        spdlog::info("[{:>6}ms] Core atom marking ({} atoms marked)", elapsed(), markedAtoms);
+    }
 
     DislocationNetwork& network = tracer.network();
     spdlog::info("Found {} dislocation segments", network.segments().size());
@@ -259,10 +273,22 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             );
         }
 
-        if(_exportStructureIdentification){
+        if(_exportStructureIdentification || !coreAtomDislocationIds.empty()){
             spdlog::info("Writing structure identification data");
+
+            StructureIdentificationExport::AtomColumnWriter columnWriter;
+            if(!coreAtomDislocationIds.empty()){
+                columnWriter = [&coreAtomDislocationIds](
+                    ColumnarAtomWriter& writer, std::size_t atomIndex, int
+                ){
+                    const int id = atomIndex < coreAtomDislocationIds.size()
+                        ? coreAtomDislocationIds[atomIndex] : -1;
+                    writer.field("dislocation_id", id);
+                };
+            }
+
             StructureIdentificationExport::streamStructureIdentificationToParquet(
-                outputFile + "_atoms.parquet", frame, *structureAnalysis
+                outputFile + "_atoms.parquet", frame, *structureAnalysis, {}, columnWriter
             );
         }
 

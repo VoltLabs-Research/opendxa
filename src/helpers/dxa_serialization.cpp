@@ -144,55 +144,12 @@ std::string structureTypeNameForExport(int structureType){
     return structureTypeName(structureType);
 }
 
-int atomIdForExport(const LammpsParser::Frame& frame, std::size_t atomIndex){
-    return atomIndex < frame.ids.size()
-        ? frame.ids[atomIndex]
-        : static_cast<int>(atomIndex);
-}
-
-Point3 atomPositionForExport(const LammpsParser::Frame& frame, std::size_t atomIndex){
-    if(atomIndex < frame.positions.size()){
-        return frame.positions[atomIndex];
-    }
-    return Point3::Origin();
-}
-
 std::string topologyNameForAtomExport(const StructureAnalysis& structureAnalysis, std::size_t atomIndex, int structureType){
     if(const Cluster* cluster = structureAnalysis.atomCluster(static_cast<int>(atomIndex));
        cluster && !cluster->topologyName.empty()){
         return cluster->topologyName;
     }
     return {};
-}
-
-json buildAtomExportRecord(
-    const LammpsParser::Frame& frame,
-    const StructureAnalysis& structureAnalysis,
-    std::size_t atomIndex
-){
-    const StructureContext& context = structureAnalysis.context();
-    const int structureType = context.structureTypes
-        ? context.structureTypes->getInt(atomIndex)
-        : static_cast<int>(StructureType::OTHER);
-    const int clusterId = context.atomClusters
-        ? context.atomClusters->getInt(atomIndex)
-        : 0;
-    const Point3 position = atomPositionForExport(frame, atomIndex);
-    json atom = {
-        {"id", atomIdForExport(frame, atomIndex)},
-        {"pos", {position.x(), position.y(), position.z()}},
-        {"structure_id", structureType},
-        {"structure_type", structureType},
-        {"structure_name", structureTypeNameForExport(structureType)},
-        {"cluster_id", clusterId}
-    };
-
-    const std::string topologyName = topologyNameForAtomExport(structureAnalysis, atomIndex, structureType);
-    if(!topologyName.empty()){
-        atom["topology_name"] = topologyName;
-    }
-
-    return atom;
 }
 
 std::array<std::uint64_t, 3> canonicalFaceKey(
@@ -625,6 +582,7 @@ void streamDislocationsToFile(
         Vector3 burgersGlobal;
         double magnitude;
         int clusterId = 0;
+        int segmentId = -1;
         std::string crystalStructure;
         std::string burgersFamily;
         std::string burgersFamilyLabel;
@@ -658,6 +616,7 @@ void streamDislocationsToFile(
             c.magnitude = c.burgersLocal.length();
             const Cluster* chunkCluster = segment->burgersVector.cluster();
             c.clusterId = chunkCluster ? chunkCluster->id : 0;
+            c.segmentId = segment->id;
             c.crystalStructure = chunkCluster
                 ? (!chunkCluster->topologyName.empty()
                     ? chunkCluster->topologyName
@@ -720,6 +679,7 @@ void streamDislocationsToFile(
             writer.field("burgers_family", c.burgersFamily);
             writer.field("burgers_family_label", c.burgersFamilyLabel);
             writer.field("cluster_id", static_cast<std::int64_t>(c.clusterId));
+            writer.field("segment_id", static_cast<std::int64_t>(c.segmentId));
             writer.field("head_vertex", pointAsList(c.points.empty() ? Point3::Origin() : c.points.front()));
             writer.field("tail_vertex", pointAsList(c.points.empty() ? Point3::Origin() : c.points.back()));
         }

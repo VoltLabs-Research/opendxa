@@ -26,6 +26,7 @@ static const std::vector<OptionBinding<S>> bindings = {
     opt("--export_interface_mesh", "Export interface mesh (currently byte-identical to the defect mesh)", false, &S::setExportInterfaceMesh),
     opt("--export_delaunay_tessellation", "Export Delaunay tessellation", false, &S::setExportDelaunayTessellation),
     opt("--export_structure_identification", "Export per-atom structure identification", false, &S::setExportStructureIdentification),
+    opt("--mark_core_atoms", "Mark dislocation core atoms (adds a dislocation_id column to the per-atom table)", false, &S::setMarkCoreAtoms),
     opt("--export_coherent_crystalline_regions", "Export coherent crystalline regions", false, &S::setExportCoherentCrystallineRegions),
     opt("--export_dislocations", "Export dislocations", true, &S::setExportDislocations),   
     opt("--export_circuit_information", "Export circuit information", true, &S::setExportCircuitInformation),

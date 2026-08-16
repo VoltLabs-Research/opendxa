@@ -75,6 +75,10 @@ public:
         _exportStructureIdentification = exportStructureIdentification;
     }
 
+    void setMarkCoreAtoms(bool markCoreAtoms){
+        _markCoreAtoms = markCoreAtoms;
+    }
+
     void setExportCoherentCrystallineRegions(bool exportCoherentCrystallineRegions){
         _exportCoherentCrystallineRegions = exportCoherentCrystallineRegions;
     }
@@ -128,6 +132,7 @@ private:
     bool _exportInterfaceMesh;
     bool _exportDelaunayTessellation;
     bool _exportStructureIdentification;
+    bool _markCoreAtoms;
     bool _exportCoherentCrystallineRegions;
     bool _exportDislocations;
     bool _exportCircuitInformation;
