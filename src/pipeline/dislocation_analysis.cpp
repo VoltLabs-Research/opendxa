@@ -10,12 +10,14 @@
 #include <volt/pipeline/interface_mesh.h>
 #include <volt/helpers/dxa_serialization.h>
 #include <volt/analysis/structure_identification_export.h>
+#include <volt/utilities/parquet_atom_writer.h>
 
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 #include <chrono>
@@ -273,22 +275,40 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             );
         }
 
-        if(_exportStructureIdentification || !coreAtomDislocationIds.empty()){
+        if(_exportStructureIdentification){
             spdlog::info("Writing structure identification data");
+            StructureIdentificationExport::streamStructureIdentificationToParquet(
+                outputFile + "_atoms.parquet", frame, *structureAnalysis
+            );
+        }
 
-            StructureIdentificationExport::AtomColumnWriter columnWriter;
-            if(!coreAtomDislocationIds.empty()){
-                columnWriter = [&coreAtomDislocationIds](
-                    ColumnarAtomWriter& writer, std::size_t atomIndex, int
-                ){
-                    const int id = atomIndex < coreAtomDislocationIds.size()
-                        ? coreAtomDislocationIds[atomIndex] : -1;
-                    writer.field("dislocation_id", id);
-                };
+        if(!coreAtomDislocationIds.empty()){
+            std::vector<std::size_t> coreAtoms;
+            for(std::size_t i = 0; i < coreAtomDislocationIds.size(); ++i){
+                if(coreAtomDislocationIds[i] >= 0) coreAtoms.push_back(i);
             }
 
-            StructureIdentificationExport::streamStructureIdentificationToParquet(
-                outputFile + "_atoms.parquet", frame, *structureAnalysis, {}, columnWriter
+            LammpsParser::Frame coreFrame;
+            coreFrame.timestep = frame.timestep;
+            coreFrame.natoms = static_cast<int>(coreAtoms.size());
+            coreFrame.simulationCell = frame.simulationCell;
+            coreFrame.positions.reserve(coreAtoms.size());
+            coreFrame.ids.reserve(coreAtoms.size());
+            for(const std::size_t source : coreAtoms){
+                coreFrame.positions.push_back(source < frame.positions.size()
+                    ? frame.positions[source] : Point3::Origin());
+                coreFrame.ids.push_back(source < frame.ids.size()
+                    ? frame.ids[source] : static_cast<int>(source));
+            }
+
+            spdlog::info("Writing core atom data ({} atoms)", coreAtoms.size());
+            streamAtomsToParquet(
+                outputFile + "_core_atoms.parquet",
+                coreFrame,
+                [](std::size_t){ return std::string("Core"); },
+                [&coreAtoms, &coreAtomDislocationIds](ColumnarAtomWriter& writer, std::size_t atomIndex){
+                    writer.field("dislocation_id", coreAtomDislocationIds[coreAtoms[atomIndex]]);
+                }
             );
         }
 
