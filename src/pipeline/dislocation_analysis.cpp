@@ -10,6 +10,7 @@
 #include <volt/pipeline/interface_mesh.h>
 #include <volt/helpers/dxa_serialization.h>
 #include <volt/analysis/structure_identification_export.h>
+#include <volt/structures/crystal_structure_types.h>
 #include <volt/utilities/parquet_atom_writer.h>
 
 #include <spdlog/spdlog.h>
@@ -301,11 +302,22 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                     ? frame.ids[source] : static_cast<int>(source));
             }
 
+            const StructureContext& structureContext = structureAnalysis->context();
+            const int* structureTypes = structureContext.structureTypes
+                ? structureContext.structureTypes->constDataInt()
+                : nullptr;
+
             spdlog::info("Writing core atom data ({} atoms)", coreAtoms.size());
             streamAtomsToParquet(
                 outputFile + "_core_atoms.parquet",
                 coreFrame,
-                [](std::size_t){ return std::string("Core"); },
+                [&coreAtoms, structureTypes](std::size_t atomIndex){
+                    return std::string(structureTypeName(
+                        structureTypes
+                            ? structureTypes[coreAtoms[atomIndex]]
+                            : static_cast<int>(StructureType::OTHER)
+                    ));
+                },
                 [&coreAtoms, &coreAtomDislocationIds](ColumnarAtomWriter& writer, std::size_t atomIndex){
                     writer.field("dislocation_id", coreAtomDislocationIds[coreAtoms[atomIndex]]);
                 }
