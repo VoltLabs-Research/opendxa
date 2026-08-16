@@ -1,5 +1,6 @@
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/pipeline/interface_mesh.h>
+#include <volt/helpers/triangle_intersection.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
 #include <tbb/blocked_range.h>
@@ -8,6 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <ranges>
+#include <array>
 #include <atomic>
 #include <algorithm>
 
@@ -30,6 +32,13 @@ BurgersCircuit* BurgersLoopBuilder::allocateCircuit(){
 
 bool BurgersLoopBuilder::traceDislocationSegments(){
     mesh().clearFaceFlag(0);
+
+    if(_markCoreAtoms){
+        const double alpha = DefectCellIndex::kAlphaScale
+            * _mesh.structureAnalysis().maximumNeighborDistance();
+        _defectCells.emplace(_mesh.tessellation(), alpha);
+        _coreCellClaims = std::vector<CoreCellClaim>(_defectCells->cellCount());
+    }
 
     for(int L : std::views::iota(3, _maxExtendedBurgersCircuitSize + 1)){
         auto dangling = _danglingNodes;
@@ -859,6 +868,101 @@ void BurgersLoopBuilder::appendLinePoint(DislocationNode& node){
 	}
 
 	node.circuit->numPreliminaryPoints++;
+
+	if(_markCoreAtoms){
+		markCoreCells(node, newPoint);
+	}
+}
+
+void BurgersLoopBuilder::markCoreCells(DislocationNode& node, const Point3& center){
+	if(node.circuit->firstEdge == nullptr) return;
+
+	const DelaunayTessellation& tessellation = _mesh.tessellation();
+	const bool capStored = !node.circuit->segmentMeshCap.empty();
+
+	std::vector<TriangleIntersection::Triangle3> cap;
+	cap.reserve(node.circuit->edgeCount);
+
+	Box3 capBounds;
+	auto* edge = node.circuit->firstEdge;
+	do{
+		const TriangleIntersection::Triangle3 triangle{
+			center + cell().wrapVector(edge->vertex1()->pos() - center),
+			center + cell().wrapVector(edge->vertex2()->pos() - center),
+			center
+		};
+		for(const Point3& corner : triangle){
+			capBounds.addPoint(corner);
+		}
+		cap.push_back(triangle);
+		edge = edge->nextCircuitEdge;
+	}while(edge != nullptr && edge != node.circuit->firstEdge);
+
+	std::vector<DelaunayTessellation::CellHandle> candidates;
+	_defectCells->queryOverlapping(capBounds, candidates);
+
+	for(auto candidate : candidates){
+		const int slot = tessellation.getUserField(candidate);
+		if(slot < 0 || static_cast<std::size_t>(slot) >= _coreCellClaims.size()) continue;
+
+		CoreCellClaim& claim = _coreCellClaims[slot];
+		if(claim.node.load(std::memory_order_relaxed) != nullptr) continue;
+
+		std::array<Point3, 4> tetrahedron;
+		for(int corner = 0; corner < 4; ++corner){
+			tetrahedron[corner] = tessellation.vertexPosition(tessellation.cellVertex(candidate, corner));
+		}
+
+		const bool intersects = std::ranges::any_of(cap, [&](const auto& triangle){
+			for(int face = 0; face < 4; ++face){
+				const TriangleIntersection::Triangle3 facet{
+					tetrahedron[DelaunayTessellation::cellFacetVertexIndex(face, 0)],
+					tetrahedron[DelaunayTessellation::cellFacetVertexIndex(face, 1)],
+					tetrahedron[DelaunayTessellation::cellFacetVertexIndex(face, 2)]
+				};
+				if(TriangleIntersection::overlap(facet, triangle)) return true;
+			}
+			return false;
+		});
+
+		if(!intersects) continue;
+
+		DislocationNode* unclaimed = nullptr;
+		if(claim.node.compare_exchange_strong(unclaimed, &node)){
+			claim.claimedWhileCapStored = capStored;
+		}
+	}
+}
+
+std::vector<int> BurgersLoopBuilder::coreAtomDislocationIds(std::size_t particleCount) const{
+	std::vector<int> ids(particleCount, -1);
+	if(_coreCellClaims.empty()) return ids;
+
+	const DelaunayTessellation& tessellation = _mesh.tessellation();
+
+	for(auto cellHandle : tessellation.cells()){
+		const int slot = tessellation.getUserField(cellHandle);
+		if(slot < 0 || static_cast<std::size_t>(slot) >= _coreCellClaims.size()) continue;
+
+		const CoreCellClaim& claim = _coreCellClaims[slot];
+		DislocationNode* node = claim.node.load(std::memory_order_relaxed);
+		if(node == nullptr) continue;
+		if(node->isDangling() && claim.claimedWhileCapStored) continue;
+
+		const DislocationSegment* segment = node->segment;
+		while(segment->replacedWith != nullptr){
+			segment = segment->replacedWith;
+		}
+
+		for(int corner = 0; corner < 4; ++corner){
+			const int particle = tessellation.vertexIndex(tessellation.cellVertex(cellHandle, corner));
+			if(particle >= 0 && static_cast<std::size_t>(particle) < ids.size()){
+				ids[particle] = segment->id;
+			}
+		}
+	}
+
+	return ids;
 }
 
 void BurgersLoopBuilder::circuitCircuitIntersection(

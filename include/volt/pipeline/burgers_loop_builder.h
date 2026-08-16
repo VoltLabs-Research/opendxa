@@ -3,6 +3,7 @@
 #include <volt/core/volt.h>
 #include <volt/utilities/memory_pool.h>
 #include <volt/helpers/dislocation_network.h>
+#include <volt/pipeline/defect_cell_index.h>
 #include <volt/pipeline/interface_mesh.h>
 #include <boost/random/uniform_int_distribution.hpp>
 #include <boost/random/mersenne_twister.hpp>
@@ -10,6 +11,7 @@
 #include <tbb/spin_mutex.h>
 #include <string_view>
 #include <atomic>
+#include <optional>
 
 namespace Volt{
 
@@ -24,6 +26,11 @@ struct BurgersLoopSearchNode{
 class BurgersLoopBuilder{
 public:
 	using SearchNode = BurgersLoopSearchNode;
+
+	struct CoreCellClaim{
+		std::atomic<DislocationNode*> node{nullptr};
+		bool claimedWhileCapStored = false;
+	};
 
 	BurgersLoopBuilder(InterfaceMesh& mesh, ClusterGraph* clusterGraph, int maxTrialCircuitSize, int maxCircuitElongation) :
 		_mesh(mesh),
@@ -61,6 +68,12 @@ public:
 		return _danglingNodes;
 	}
 
+	void setMarkCoreAtoms(bool markCoreAtoms){
+		_markCoreAtoms = markCoreAtoms;
+	}
+
+	[[nodiscard]] std::vector<int> coreAtomDislocationIds(std::size_t particleCount) const;
+
 private:
 	BurgersCircuit* allocateCircuit();
 	BurgersCircuit* buildReverseCircuit(BurgersCircuit* forwardCircuit);
@@ -69,6 +82,7 @@ private:
 	void createAndTraceSegment(const ClusterVector& burgersVector, BurgersCircuit* forwardCircuit, int maxCircuitLength);
 	void traceSegment(DislocationSegment& segment, DislocationNode& node, int maxCircuitLength, bool isPrimarySegment);
 	void appendLinePoint(DislocationNode& node);
+	void markCoreCells(DislocationNode& node, const Point3& center);
 	void circuitCircuitIntersection(InterfaceMesh::Edge* circuitAEdge1, InterfaceMesh::Edge* circuitAEdge2, InterfaceMesh::Edge* circuitBEdge1, InterfaceMesh::Edge* circuitBEdge2, int& goingOutside, int& goingInside);
 	void createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength);
 
@@ -106,6 +120,9 @@ private:
 	BurgersCircuit* _unusedCircuit;
 	mutable std::atomic<size_t> _edgeStartIndex{0};
 
+	bool _markCoreAtoms = false;
+	std::optional<DefectCellIndex> _defectCells;
+	std::vector<CoreCellClaim> _coreCellClaims;
 };
 
 }

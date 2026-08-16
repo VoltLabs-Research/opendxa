@@ -15,7 +15,7 @@
             "icon": "HiCube",
             "author": "Rodolfo Herrera",
             "license": "MIT",
-            "version": "2.2.1",
+            "version": "2.3.0",
             "homepage": "https://github.com/rodyherrera/Volterra",
             "description": "Analisis de dislocaciones a partir del algoritmo de identificacion de estructura seleccionado por el usuario."
           }
@@ -172,6 +172,18 @@
                 "label": "Export Structure Identification",
                 "default": false,
                 "cliValueStyle": "explicit"
+              },
+              {
+                "argument": "mark_core_atoms",
+                "type": "boolean",
+                "label": "Mark Core Atoms",
+                "default": false,
+                "cliValueStyle": "explicit",
+                "visibleWhen": {
+                  "argument": "export_structure_identification",
+                  "operator": "equals",
+                  "value": true
+                }
               },
               {
                 "argument": "export_coherent_crystalline_regions",
