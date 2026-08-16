@@ -358,18 +358,14 @@ void streamCoherentCrystallineRegionsToFile(
         for(std::size_t atomIndex : atomIndices){
             const int astype = context.structureTypes ? context.structureTypes->getInt(atomIndex) : static_cast<int>(StructureType::OTHER);
             const int clustId = context.atomClusters ? context.atomClusters->getInt(atomIndex) : 0;
-            const std::string atopo = topologyNameForAtomExport(structureAnalysis, atomIndex, astype);
             const auto& pos = atomIndex < frame.positions.size() ? frame.positions[atomIndex] : Point3::Origin();
-            json atom = {
+            atoms.push_back({
                 {"id", atomIndex < frame.ids.size() ? frame.ids[atomIndex] : static_cast<int>(atomIndex)},
                 {"pos", {pos.x(), pos.y(), pos.z()}},
                 {"structure_id", astype},
-                {"structure_type", astype},
                 {"structure_name", structureTypeNameForExport(astype)},
                 {"cluster_id", clustId}
-            };
-            if(!atopo.empty()) atom["topology_name"] = atopo;
-            atoms.push_back(std::move(atom));
+            });
         }
         atomisticExporter[clusterName] = std::move(atoms);
     }
