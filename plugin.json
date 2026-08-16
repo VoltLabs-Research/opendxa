@@ -15,7 +15,7 @@
             "icon": "HiCube",
             "author": "Rodolfo Herrera",
             "license": "MIT",
-            "version": "2.4.1",
+            "version": "2.4.2",
             "homepage": "https://github.com/rodyherrera/Volterra",
             "description": "Analisis de dislocaciones a partir del algoritmo de identificacion de estructura seleccionado por el usuario."
           }
@@ -648,7 +648,7 @@
           "exposure": {
             "name": "Core Atoms",
             "icon": "HiCube",
-            "results": "atoms.parquet",
+            "results": "core_atoms.parquet",
             "iterable": "",
             "exportWhen": {
               "argument": "mark_core_atoms",
@@ -671,39 +671,9 @@
             "type": "glb",
             "options": {
               "propertyColors": {
-                "OTHER": [
-                  0.949,
-                  0.949,
-                  0.949,
-                  1
-                ],
-                "FCC": [
-                  0.4,
+                "Core": [
                   1,
-                  0.4,
-                  1
-                ],
-                "HCP": [
-                  1,
-                  0.4,
-                  0.4,
-                  1
-                ],
-                "BCC": [
-                  0.4,
-                  0.4,
-                  1,
-                  1
-                ],
-                "CUBIC_DIAMOND": [
-                  0.0745,
-                  0.6275,
-                  0.9961,
-                  1
-                ],
-                "HEX_DIAMOND": [
-                  0.9961,
-                  0.5373,
+                  0.5,
                   0,
                   1
                 ]
