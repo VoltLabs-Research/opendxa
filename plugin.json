@@ -15,7 +15,7 @@
             "icon": "HiCube",
             "author": "Rodolfo Herrera",
             "license": "MIT",
-            "version": "2.4.0",
+            "version": "2.4.1",
             "homepage": "https://github.com/rodyherrera/Volterra",
             "description": "Analisis de dislocaciones a partir del algoritmo de identificacion de estructura seleccionado por el usuario."
           }
@@ -178,12 +178,7 @@
                 "type": "boolean",
                 "label": "Mark Core Atoms",
                 "default": false,
-                "cliValueStyle": "explicit",
-                "visibleWhen": {
-                  "argument": "export_structure_identification",
-                  "operator": "equals",
-                  "value": true
-                }
+                "cliValueStyle": "explicit"
               },
               {
                 "argument": "export_coherent_crystalline_regions",
@@ -643,6 +638,81 @@
         }
       },
       {
+        "id": "core-atoms-exposure",
+        "type": "exposure",
+        "position": {
+          "x": 2016,
+          "y": 1024
+        },
+        "data": {
+          "exposure": {
+            "name": "Core Atoms",
+            "icon": "HiCube",
+            "results": "atoms.parquet",
+            "iterable": "",
+            "exportWhen": {
+              "argument": "mark_core_atoms",
+              "operator": "equals",
+              "value": true
+            }
+          }
+        }
+      },
+      {
+        "id": "core-atoms-export",
+        "type": "export",
+        "position": {
+          "x": 2336,
+          "y": 1024
+        },
+        "data": {
+          "export": {
+            "exporter": "AtomisticExporter",
+            "type": "glb",
+            "options": {
+              "propertyColors": {
+                "OTHER": [
+                  0.949,
+                  0.949,
+                  0.949,
+                  1
+                ],
+                "FCC": [
+                  0.4,
+                  1,
+                  0.4,
+                  1
+                ],
+                "HCP": [
+                  1,
+                  0.4,
+                  0.4,
+                  1
+                ],
+                "BCC": [
+                  0.4,
+                  0.4,
+                  1,
+                  1
+                ],
+                "CUBIC_DIAMOND": [
+                  0.0745,
+                  0.6275,
+                  0.9961,
+                  1
+                ],
+                "HEX_DIAMOND": [
+                  0.9961,
+                  0.5373,
+                  0,
+                  1
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
         "id": "burgers-counts-chart-exposure",
         "type": "exposure",
         "position": {
@@ -1044,6 +1114,20 @@
         "source": "crystalline-coherent-regions-exposure",
         "sourceHandle": "output",
         "target": "crystalline-coherent-regions-export",
+        "targetHandle": "input"
+      },
+      {
+        "id": "edge-entrypoint-core-atoms-exposure",
+        "source": "analysis-entrypoint",
+        "sourceHandle": "output",
+        "target": "core-atoms-exposure",
+        "targetHandle": "input"
+      },
+      {
+        "id": "edge-core-atoms-exposure-core-atoms-export",
+        "source": "core-atoms-exposure",
+        "sourceHandle": "output",
+        "target": "core-atoms-export",
         "targetHandle": "input"
       },
       {
