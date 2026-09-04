@@ -16,11 +16,15 @@
 #include <string>
 #include <volt/utilities/json_utils.h>
 #include <volt/utilities/parquet_line_writer.h>
+#include <volt/utilities/parquet_mesh_writer.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
+#include <filesystem>
 #include <fstream>
 
 namespace Volt::DxaSerialization {
+
+constexpr const char* kParquetSourceKey = "__parquet_source__";
 
 namespace Detail {
 
@@ -798,36 +802,38 @@ void streamMeshToFile(
         exportFaces.push_back(newFaceVerts);
     }
 
-    json points = json::array();
-    for(size_t i = 0; i < exportPoints.size(); ++i){
-        points.push_back({
-            {"index", static_cast<int64_t>(i)},
-            {"position", {exportPoints[i].x(), exportPoints[i].y(), exportPoints[i].z()}}
-        });
-    }
-    json facets = json::array();
-    for(const auto& f : exportFaces){
-        facets.push_back({{"vertices", {f[0], f[1], f[2]}}});
-    }
+    const std::string basePath = filePath.size() >= 8
+        && filePath.compare(filePath.size() - 8, 8, ".parquet") == 0
+        ? filePath.substr(0, filePath.size() - 8)
+        : filePath;
+    const std::string verticesPath = basePath + ".vertices.parquet";
+    const std::string facetsPath = basePath + ".facets.parquet";
+
+    streamMeshTablesToParquet(verticesPath, facetsPath, exportPoints, exportFaces);
+
+    const std::string verticesName = std::filesystem::path(verticesPath).filename().string();
+    const std::string facetsName = std::filesystem::path(facetsPath).filename().string();
 
     json doc;
     doc["main_listing"] = {
         {"total_nodes", static_cast<int64_t>(exportPoints.size())},
         {"total_facets", static_cast<int64_t>(exportFaces.size())}
     };
-    doc["sub_listings"] = {{"points", points}, {"facets", facets}};
-    doc["export"]["MeshExporter"] = {{"vertices", std::move(points)}, {"facets", std::move(facets)}};
 
     const auto& cellMatrix = cell.matrix();
     const auto& cellPbc = cell.pbcFlags();
-    doc["export"]["MeshExporter"]["cell"] = {
-        {"matrix", {
-            {cellMatrix.column(0).x(), cellMatrix.column(0).y(), cellMatrix.column(0).z()},
-            {cellMatrix.column(1).x(), cellMatrix.column(1).y(), cellMatrix.column(1).z()},
-            {cellMatrix.column(2).x(), cellMatrix.column(2).y(), cellMatrix.column(2).z()}
-        }},
-        {"origin", {cellMatrix.column(3).x(), cellMatrix.column(3).y(), cellMatrix.column(3).z()}},
-        {"pbc", {cellPbc[0], cellPbc[1], cellPbc[2]}}
+    doc["export"]["MeshExporter"][kParquetSourceKey] = {
+        {"vertices", verticesName},
+        {"facets", facetsName},
+        {"cell", {
+            {"matrix", {
+                {cellMatrix.column(0).x(), cellMatrix.column(0).y(), cellMatrix.column(0).z()},
+                {cellMatrix.column(1).x(), cellMatrix.column(1).y(), cellMatrix.column(1).z()},
+                {cellMatrix.column(2).x(), cellMatrix.column(2).y(), cellMatrix.column(2).z()}
+            }},
+            {"origin", {cellMatrix.column(3).x(), cellMatrix.column(3).y(), cellMatrix.column(3).z()}},
+            {"pbc", {cellPbc[0], cellPbc[1], cellPbc[2]}}
+        }}
     };
 
     if(includeTopologyInfo){
