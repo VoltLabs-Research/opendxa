@@ -40,7 +40,8 @@
                   "polyhedral-template-matching",
                   "adaptive-common-neighbor-analysis",
                   "pattern-structure-matching",
-                  "reference-crystal-matching"
+                  "reference-crystal-matching",
+                  "generalized-template-matching"
                 ]
               },
               {
@@ -52,7 +53,8 @@
                   "polyhedral-template-matching",
                   "adaptive-common-neighbor-analysis",
                   "pattern-structure-matching",
-                  "reference-crystal-matching"
+                  "reference-crystal-matching",
+                  "generalized-template-matching"
                 ]
               },
               {
@@ -64,7 +66,8 @@
                   "polyhedral-template-matching",
                   "adaptive-common-neighbor-analysis",
                   "pattern-structure-matching",
-                  "reference-crystal-matching"
+                  "reference-crystal-matching",
+                  "generalized-template-matching"
                 ]
               },
               {
