@@ -159,13 +159,16 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
 
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
     elasticMap.generateTessellationEdges();
-    spdlog::info("[{:>6}ms]   ... tessellation edges", elapsed());
+    const auto edgesMs = elapsed();
+    spdlog::info("[{:>6}ms]   ... tessellation edges", edgesMs);
     elasticMap.assignVerticesToClusters();
-    spdlog::info("[{:>6}ms]   ... vertex-to-cluster labels", elapsed());
+    const auto labelsMs = elapsed();
+    spdlog::info("[{:>6}ms]   ... vertex-to-cluster labels", labelsMs);
     elasticMap.assignIdealVectorsToEdges(false, _crystalPathSteps);
-    spdlog::info("[{:>6}ms]   ... ideal vectors on edges", elapsed());
+    const auto vectorsMs = elapsed();
+    spdlog::info("[{:>6}ms]   ... ideal vectors on edges", vectorsMs);
     elasticMap.shrinkVertexStorage();
-    spdlog::info("[{:>6}ms] Elastic mapping (total of the four above)", elapsed());
+    spdlog::info("[{:>6}ms] Elastic mapping", edgesMs + labelsMs + vectorsMs + elapsed());
 
     InterfaceMesh interfaceMesh(elasticMap);
     interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance(), _interfaceAlphaScale);
