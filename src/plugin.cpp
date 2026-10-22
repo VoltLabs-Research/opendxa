@@ -136,8 +136,14 @@ VOLT_PLUGIN_MAIN(buildDescriptor(),
     try{
         if(const auto* topology = crystalTopologyByName(referenceName)){
             resolvedTopology = topology->name;
+        }else{
+            spdlog::info("Reference topology '{}' is not a known lattice topology; using it as given", referenceName);
         }
-    }catch(const std::exception&){
+    }catch(const std::exception& error){
+        spdlog::warn("Could not look up reference topology '{}' ({}); using it as given", referenceName, error.what());
+    }
+    if(resolvedTopology != referenceName){
+        spdlog::info("Reference topology '{}' resolved to '{}'", referenceName, resolvedTopology);
     }
     analyzer.setReferenceTopology(resolvedTopology);
 
