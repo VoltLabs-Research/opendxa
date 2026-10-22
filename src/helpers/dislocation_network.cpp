@@ -1,4 +1,5 @@
 #include <volt/core/volt.h>
+#include <volt/core/progress.h>
 #include <volt/helpers/dislocation_network.h>
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
@@ -56,6 +57,7 @@ void DislocationNetwork::discardSegment(DislocationSegment* segment){
 
 void DislocationNetwork::smoothDislocationLines(double lineSmoothingLevel, double linePointInterval){
 	const auto& segmentList = segments();
+	ProgressReporter progress("Smoothing dislocation lines", segmentList.size());
 	tbb::parallel_for(tbb::blocked_range<size_t>(0, segmentList.size(), 128),
 		[&](const tbb::blocked_range<size_t>& r){
 		for(size_t i = r.begin(); i < r.end(); ++i){
@@ -78,6 +80,7 @@ void DislocationNetwork::smoothDislocationLines(double lineSmoothingLevel, doubl
 
 			segment->coreSize.clear();
 		}
+		progress.advance(r.size());
 	});
 }
 
