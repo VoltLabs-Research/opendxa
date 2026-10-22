@@ -3,6 +3,7 @@
 #include <volt/helpers/burgers_circuit.h>
 #include <volt/structures/crystal_structure_types.h>
 #include <cassert>
+#include <cstdio>
 #include <functional>
 #include <numeric>
 #include <unordered_set>
@@ -19,6 +20,7 @@
 #include <volt/utilities/parquet_mesh_writer.h>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
+#include <spdlog/spdlog.h>
 #include <filesystem>
 #include <fstream>
 
@@ -661,6 +663,28 @@ void streamDislocationsToFile(
         }
     }
     if(chunks.empty()) minLength = 0;
+
+    if(validSegments.size() < segments.size()){
+        spdlog::info("  Skipped {} degenerate segments (fewer than two points)", segments.size() - validSegments.size());
+    }
+    spdlog::info(
+        "  {} dislocation lines{} ({} points), length min {:.2f} / mean {:.2f} / max {:.2f}",
+        chunks.size(), simulationCell && options.clipPbcSegments ? " after PBC clipping" : "", totalPoints,
+        minLength, chunks.empty() ? 0.0 : totalLength / chunks.size(), maxLength
+    );
+    if(!familySummary.empty()){
+        std::string families;
+        for(const auto& entry : familySummary){
+            const FamilyTally& tally = entry.second;
+            char share[48];
+            std::snprintf(share, sizeof(share), " %d (%.1f%%)", tally.segmentCount,
+                totalLength > 0 ? 100.0 * tally.totalLength / totalLength : 0.0);
+            if(!families.empty()) families += ", ";
+            families += tally.label;
+            families += share;
+        }
+        spdlog::info("  Burgers vector families (lines, % of length): {}", families);
+    }
 
     auto vecAsList = [](const Vector3& v){ return std::vector<double>{v.x(), v.y(), v.z()}; };
     auto pointAsList = [](const Point3& p){ return std::vector<double>{p.x(), p.y(), p.z()}; };
