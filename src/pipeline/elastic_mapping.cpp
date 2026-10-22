@@ -1,4 +1,5 @@
 #include <volt/core/volt.h>
+#include <volt/core/progress.h>
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/helpers/crystal_path_finder.h>
 #include <volt/pipeline/elastic_mapping.h>
@@ -169,6 +170,7 @@ void ElasticMapping::assignVerticesToClusters(){
 }
 
 void ElasticMapping::assignIdealVectorsToEdges(bool reconstructEdgeVectors, int crystalPathSteps){
+    ProgressReporter progress("  Assigning ideal vectors to edges (by atom)", _vertexEdges.size());
     tbb::parallel_for(tbb::blocked_range<size_t>(0, _vertexEdges.size()), [&](const tbb::blocked_range<size_t>& r){
         (void)reconstructEdgeVectors;
         CrystalPathFinder pathFinder{ structureAnalysis(), crystalPathSteps };
@@ -201,6 +203,7 @@ void ElasticMapping::assignIdealVectorsToEdges(bool reconstructEdgeVectors, int 
                 }
             }
         }
+        progress.advance(r.size());
     });
 }
 

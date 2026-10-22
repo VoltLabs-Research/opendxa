@@ -1,6 +1,7 @@
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/pipeline/interface_mesh.h>
 #include <volt/helpers/triangle_intersection.h>
+#include <volt/core/progress.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_for_each.h>
 #include <tbb/blocked_range.h>
@@ -40,6 +41,9 @@ bool BurgersLoopBuilder::traceDislocationSegments(){
         _coreCellClaims = std::vector<CoreCellClaim>(_defectCells->cellCount());
     }
 
+    // One step per circuit length, from 3 up to the stretched maximum.
+    ProgressReporter progress("Tracing Burgers circuits",
+        static_cast<std::uint64_t>(std::max(0, _maxExtendedBurgersCircuitSize - 2)));
     for(int L : std::views::iota(3, _maxExtendedBurgersCircuitSize + 1)){
         auto dangling = _danglingNodes;
 
@@ -65,6 +69,7 @@ bool BurgersLoopBuilder::traceDislocationSegments(){
                 }
             });
         }
+        progress.update(static_cast<std::uint64_t>(L - 2));
     }
 
     return true;
