@@ -90,11 +90,11 @@ public:
 		};
     }
 
-private:
     [[nodiscard]] auto edgeCount() const noexcept -> int {
 		return _edgeCount;
 	}
 
+private:
     [[nodiscard]] auto findEdge(int v1, int v2) const noexcept -> TessellationEdge const* {
         assert(v1 >= 0 && v1 < static_cast<int>(_vertexEdges.size()));
         assert(v2 >= 0 && v2 < static_cast<int>(_vertexEdges.size()));
