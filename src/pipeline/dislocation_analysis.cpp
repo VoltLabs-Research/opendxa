@@ -198,7 +198,15 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     InterfaceMesh interfaceMesh(elasticMap);
     interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance(), _interfaceAlphaScale);
     elasticMap.releaseCaches();
-    spdlog::info("[{:>6}ms] Interface mesh", elapsed());
+    spdlog::info(
+        "[{:>6}ms] Interface mesh: {} facets, {} vertices{}",
+        elapsed(), interfaceMesh.faceCount(), interfaceMesh.vertexCount(),
+        interfaceMesh.isCompletelyGood() && !interfaceMesh.isCompletelyBad()
+            ? " (no elastically incompatible tetrahedra)" : ""
+    );
+    if(interfaceMesh.isCompletelyBad()){
+        spdlog::warn("No elastically compatible tetrahedra: there is no crystalline region to trace dislocations in");
+    }
 
     const int maxTrialCircuitSize = static_cast<int>(_maxTrialCircuitSize);
     const int circuitStretchability = static_cast<int>(_circuitStretchability);
