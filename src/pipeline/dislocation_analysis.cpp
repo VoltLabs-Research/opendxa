@@ -2,6 +2,7 @@
 
 #include <volt/analysis/structure_analysis.h>
 #include <volt/core/frame_adapter.h>
+#include <volt/core/progress.h>
 #include <volt/core/reconstructed_structure.h>
 #include <volt/analysis/cluster_graph_io.h>
 #include <volt/pipeline/burgers_loop_builder.h>
@@ -125,7 +126,24 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         }
     }
 
-    spdlog::info("[{:>6}ms] Structure reconstruction", elapsed());
+    const ClusterGraph& clusterGraph = structureAnalysis->clusterGraph();
+    const auto clusterCount = std::count_if(
+        clusterGraph.clusters().begin(), clusterGraph.clusters().end(),
+        [](const Cluster* cluster){ return cluster->id != 0; }
+    );
+    std::size_t clusteredAtoms = 0;
+    if(context.atomClusters){
+        const int* atomClusters = context.atomClusters->constDataInt();
+        clusteredAtoms = static_cast<std::size_t>(std::count_if(
+            atomClusters, atomClusters + context.atomClusters->size(),
+            [](int clusterId){ return clusterId != 0; }
+        ));
+    }
+    spdlog::info(
+        "[{:>6}ms] Structure reconstruction: {} clusters, {} transitions, {} of {} atoms in clusters ({:.1f}%)",
+        elapsed(), clusterCount, clusterGraph.clusterTransitions().size(),
+        clusteredAtoms, context.atomCount(), percentOf(clusteredAtoms, context.atomCount())
+    );
 
     if(metricRescaleActive){
         if(structureAnalysis->hasNeighborLatticeVectorOverrides()){
@@ -157,13 +175,13 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         _coverDomainWithFiniteTets,
         nullptr
     );
-    spdlog::info("[{:>6}ms] Delaunay tessellation", elapsed());
+    spdlog::info("[{:>6}ms] Delaunay tessellation: {} primary tetrahedra", elapsed(), tessellation.numberOfPrimaryTetrahedra());
 
     spdlog::info("Computing elastic mapping (crystal path search depth {})...", _crystalPathSteps);
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
     elasticMap.generateTessellationEdges();
     const auto edgesMs = elapsed();
-    spdlog::info("[{:>6}ms]   ... tessellation edges", edgesMs);
+    spdlog::info("[{:>6}ms]   ... tessellation edges: {}", edgesMs, elasticMap.edgeCount());
     elasticMap.assignVerticesToClusters();
     const auto labelsMs = elapsed();
     spdlog::info("[{:>6}ms]   ... vertex-to-cluster labels", labelsMs);
