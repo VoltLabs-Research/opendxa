@@ -110,6 +110,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         analysisCell.setMatrix(cellMatrix);
     }
 
+    spdlog::info("Reconstructing structure from the upstream contract...");
     {
         std::string reconstructionError;
         if(!ReconstructedStructureLoader::load(
@@ -147,6 +148,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
 
     DelaunayTessellation tessellation;
     double ghostLayerSize = _ghostLayerScale * structureAnalysis->maximumNeighborDistance();
+    spdlog::info("Building Delaunay tessellation (ghost layer {:.2f})...", ghostLayerSize);
     tessellation.generateTessellation(
         context.simCell,
         context.positions->constDataPoint3(),
@@ -157,6 +159,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     );
     spdlog::info("[{:>6}ms] Delaunay tessellation", elapsed());
 
+    spdlog::info("Computing elastic mapping (crystal path search depth {})...", _crystalPathSteps);
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
     elasticMap.generateTessellationEdges();
     const auto edgesMs = elapsed();
@@ -170,16 +173,26 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     elasticMap.shrinkVertexStorage();
     spdlog::info("[{:>6}ms] Elastic mapping", edgesMs + labelsMs + vectorsMs + elapsed());
 
+    spdlog::info(
+        "Building interface mesh (alpha {:.2f})...",
+        _interfaceAlphaScale * structureAnalysis->maximumNeighborDistance()
+    );
     InterfaceMesh interfaceMesh(elasticMap);
     interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance(), _interfaceAlphaScale);
     elasticMap.releaseCaches();
     spdlog::info("[{:>6}ms] Interface mesh", elapsed());
 
+    const int maxTrialCircuitSize = static_cast<int>(_maxTrialCircuitSize);
+    const int circuitStretchability = static_cast<int>(_circuitStretchability);
+    spdlog::info(
+        "Tracing Burgers circuits (trial circuits up to {} edges, stretched up to {})...",
+        maxTrialCircuitSize, maxTrialCircuitSize + circuitStretchability
+    );
     BurgersLoopBuilder tracer(
         interfaceMesh,
         &structureAnalysis->clusterGraph(),
-        static_cast<int>(_maxTrialCircuitSize),
-        static_cast<int>(_circuitStretchability)
+        maxTrialCircuitSize,
+        circuitStretchability
     );
     tracer.setMarkCoreAtoms(_markCoreAtoms);
     tracer.traceDislocationSegments();
