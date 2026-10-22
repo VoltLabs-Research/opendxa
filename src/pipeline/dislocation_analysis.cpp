@@ -17,6 +17,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -27,6 +28,45 @@
 namespace Volt{
 
 using namespace Volt::Particles;
+
+namespace{
+
+struct NetworkTopology{
+    std::size_t closedLoops = 0;
+    std::size_t infiniteLines = 0;
+    std::size_t junctions = 0;
+    std::size_t danglingEnds = 0;
+};
+
+NetworkTopology summarizeNetworkTopology(const DislocationNetwork& network){
+    NetworkTopology topology;
+    for(const DislocationSegment* segment : network.segments()){
+        if(!segment) continue;
+        if(segment->isClosedLoop()){
+            if(!segment->line.empty() && segment->isInfiniteLine()) ++topology.infiniteLines;
+            else ++topology.closedLoops;
+            continue;
+        }
+        for(const DislocationNode* node : segment->nodes){
+            if(node->isDangling()){
+                ++topology.danglingEnds;
+                continue;
+            }
+            // Every arm of a junction is visited; count the junction once, at its lowest-addressed arm.
+            bool lowestArm = true;
+            for(const DislocationNode* arm = node->junctionRing; arm != node; arm = arm->junctionRing){
+                if(std::less<const DislocationNode*>{}(arm, node)){
+                    lowestArm = false;
+                    break;
+                }
+            }
+            if(lowestArm) ++topology.junctions;
+        }
+    }
+    return topology;
+}
+
+}
 
 DislocationAnalysis::DislocationAnalysis()
     : _maxTrialCircuitSize(14),
@@ -223,7 +263,12 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     tracer.setMarkCoreAtoms(_markCoreAtoms);
     tracer.traceDislocationSegments();
     tracer.finishDislocationSegments(_referenceTopologyName);
-    spdlog::info("[{:>6}ms] Burgers loop tracing", elapsed());
+    const NetworkTopology topology = summarizeNetworkTopology(tracer.network());
+    spdlog::info(
+        "[{:>6}ms] Burgers loop tracing: {} segments ({} closed loops, {} infinite lines), {} junctions, {} dangling ends",
+        elapsed(), tracer.network().segments().size(), topology.closedLoops, topology.infiniteLines,
+        topology.junctions, topology.danglingEnds
+    );
 
     std::vector<int> coreAtomDislocationIds;
     if(_markCoreAtoms){
@@ -236,17 +281,18 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     }
 
     DislocationNetwork& network = tracer.network();
-    spdlog::info("Found {} dislocation segments", network.segments().size());
 
     InterfaceMeshTopology defectMesh;
     const bool needDefectMesh = _exportDefectMesh && !outputFile.empty();
     if(needDefectMesh){
-        if(!interfaceMesh.generateDefectMesh(tracer, defectMesh)){
+        const bool watertight = interfaceMesh.generateDefectMesh(tracer, defectMesh);
+        if(!watertight){
             spdlog::warn("Defect mesh is not watertight: at least one dislocation hole was left uncapped");
         }
         spdlog::info(
-            "[{:>6}ms] Defect mesh ({} of {} interface facets kept, {} vertices)",
-            elapsed(), defectMesh.faceCount(), interfaceMesh.faceCount(), defectMesh.vertexCount()
+            "[{:>6}ms] Defect mesh ({} of {} interface facets kept, {} vertices{})",
+            elapsed(), defectMesh.faceCount(), interfaceMesh.faceCount(), defectMesh.vertexCount(),
+            watertight ? ", watertight" : ""
         );
     }
 
@@ -264,7 +310,15 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     }
 
     network.smoothDislocationLines(_lineSmoothingLevel, _linePointInterval);
-    spdlog::info("[{:>6}ms] Line smoothing", elapsed());
+    double totalLineLength = 0.0;
+    for(const DislocationSegment* segment : network.segments()){
+        if(segment) totalLineLength += segment->calculateLength();
+    }
+    const double cellVolume = frame.simulationCell.volume3D();
+    spdlog::info(
+        "[{:>6}ms] Line smoothing: total line length {:.2f}, dislocation density {:.3e}",
+        elapsed(), totalLineLength, cellVolume > 0.0 ? totalLineLength / cellVolume : 0.0
+    );
 
     if(!outputFile.empty()){
         if(needDefectMesh){
