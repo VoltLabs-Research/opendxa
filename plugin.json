@@ -41,7 +41,8 @@
                   "adaptive-common-neighbor-analysis",
                   "pattern-structure-matching",
                   "reference-crystal-matching",
-                  "generalized-template-matching"
+                  "generalized-template-matching",
+                  "cnat"
                 ]
               },
               {
@@ -54,7 +55,8 @@
                   "adaptive-common-neighbor-analysis",
                   "pattern-structure-matching",
                   "reference-crystal-matching",
-                  "generalized-template-matching"
+                  "generalized-template-matching",
+                  "cnat"
                 ]
               },
               {
@@ -67,7 +69,8 @@
                   "adaptive-common-neighbor-analysis",
                   "pattern-structure-matching",
                   "reference-crystal-matching",
-                  "generalized-template-matching"
+                  "generalized-template-matching",
+                  "cnat"
                 ]
               },
               {
