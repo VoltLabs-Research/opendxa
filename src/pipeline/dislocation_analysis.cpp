@@ -151,6 +151,29 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         analysisCell.setMatrix(cellMatrix);
     }
 
+    // The outputs this run writes, in the units of the phase weights below; skipped ones weigh nothing.
+    const bool writesOutputs = !outputFile.empty();
+    const bool needDefectMesh = _exportDefectMesh && writesOutputs;
+    const double defectMeshOutput = needDefectMesh ? 1.0 : 0.0;
+    const double dislocationsOutput = writesOutputs && _exportDislocations ? 0.2 : 0.0;
+    const double interfaceMeshOutput = writesOutputs && _exportInterfaceMesh ? 1.0 : 0.0;
+    const double tessellationOutput = writesOutputs && _exportDelaunayTessellation ? 8.0 : 0.0;
+    const double structureOutput = writesOutputs && _exportStructureIdentification ? 2.0 : 0.0;
+    const double coreAtomsOutput = writesOutputs && _markCoreAtoms ? 0.2 : 0.0;
+    const double regionsOutput = writesOutputs && _exportCoherentCrystallineRegions ? 3.0 : 0.0;
+
+    // Structure reconstruction, Delaunay tessellation, tessellation edges, vertex-to-cluster labels,
+    // ideal vectors, interface mesh, Burgers circuit tracing, core atom marking, defect mesh, line
+    // smoothing and outputs, weighed by the phase times logged on sample runs.
+    ProgressSteps steps({
+        2.0, 4.0, 1.0, 0.2, 1.5, 2.5, 6.0,
+        _markCoreAtoms ? 0.3 : 0.0,
+        needDefectMesh ? 0.6 : 0.0,
+        0.1,
+        defectMeshOutput + dislocationsOutput + interfaceMeshOutput + tessellationOutput
+            + structureOutput + coreAtomsOutput + regionsOutput
+    });
+    JobProgress::instance().setText("Reconstructing structure from the upstream contract");
     spdlog::info("Reconstructing structure from the upstream contract...");
     {
         std::string reconstructionError;
@@ -203,6 +226,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             context.maximumNeighborDistance /= smax;
         }
     }
+    steps.next("Building the Delaunay tessellation");
 
     DelaunayTessellation tessellation;
     double ghostLayerSize = _ghostLayerScale * structureAnalysis->maximumNeighborDistance();
@@ -216,20 +240,24 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         nullptr
     );
     spdlog::info("[{:>6}ms] Delaunay tessellation: {} primary tetrahedra", elapsed(), tessellation.numberOfPrimaryTetrahedra());
+    steps.next("Building tessellation edges");
 
     spdlog::info("Computing elastic mapping (crystal path search depth {})...", _crystalPathSteps);
     ElasticMapping elasticMap(*structureAnalysis, tessellation);
     elasticMap.generateTessellationEdges();
     const auto edgesMs = elapsed();
     spdlog::info("[{:>6}ms]   ... tessellation edges: {}", edgesMs, elasticMap.edgeCount());
+    steps.next("Assigning vertices to clusters");
     elasticMap.assignVerticesToClusters();
     const auto labelsMs = elapsed();
     spdlog::info("[{:>6}ms]   ... vertex-to-cluster labels", labelsMs);
+    steps.next("Assigning ideal vectors to edges");
     elasticMap.assignIdealVectorsToEdges(false, _crystalPathSteps);
     const auto vectorsMs = elapsed();
     spdlog::info("[{:>6}ms]   ... ideal vectors on edges", vectorsMs);
     elasticMap.shrinkVertexStorage();
     spdlog::info("[{:>6}ms] Elastic mapping", edgesMs + labelsMs + vectorsMs + elapsed());
+    steps.next("Building the interface mesh");
 
     spdlog::info(
         "Building interface mesh (alpha {:.2f})...",
@@ -247,6 +275,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     if(interfaceMesh.isCompletelyBad()){
         spdlog::warn("No elastically compatible tetrahedra: there is no crystalline region to trace dislocations in");
     }
+    steps.next("Tracing Burgers circuits");
 
     const int maxTrialCircuitSize = static_cast<int>(_maxTrialCircuitSize);
     const int circuitStretchability = static_cast<int>(_circuitStretchability);
@@ -269,6 +298,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         elapsed(), tracer.network().segments().size(), topology.closedLoops, topology.infiniteLines,
         topology.junctions, topology.danglingEnds
     );
+    steps.next("Marking core atoms");
 
     std::vector<int> coreAtomDislocationIds;
     if(_markCoreAtoms){
@@ -279,11 +309,11 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         );
         spdlog::info("[{:>6}ms] Core atom marking ({} atoms marked)", elapsed(), markedAtoms);
     }
+    steps.next("Building the defect mesh");
 
     DislocationNetwork& network = tracer.network();
 
     InterfaceMeshTopology defectMesh;
-    const bool needDefectMesh = _exportDefectMesh && !outputFile.empty();
     if(needDefectMesh){
         const bool watertight = interfaceMesh.generateDefectMesh(tracer, defectMesh);
         if(!watertight){
@@ -295,6 +325,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
             watertight ? ", watertight" : ""
         );
     }
+    steps.next("Smoothing dislocation lines");
 
     if(metricRescaleActive){
         for(DislocationSegment* segment : network.segments()){
@@ -319,8 +350,15 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         "[{:>6}ms] Line smoothing: total line length {:.2f}, dislocation density {:.3e}",
         elapsed(), totalLineLength, cellVolume > 0.0 ? totalLineLength / cellVolume : 0.0
     );
+    steps.next("Writing outputs");
 
     if(!outputFile.empty()){
+        // Defect mesh, dislocations, interface mesh, Delaunay tessellation, structure identification,
+        // core atoms and coherent crystalline regions, weighed as above.
+        ProgressSteps outputSteps({
+            defectMeshOutput, dislocationsOutput, interfaceMeshOutput, tessellationOutput,
+            structureOutput, coreAtomsOutput, regionsOutput
+        });
         if(needDefectMesh){
             spdlog::info("Writing defect mesh data");
             DxaSerialization::streamMeshToFile(
@@ -332,6 +370,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
 
             defectMesh.clear();
         }
+        outputSteps.next();
 
         if(_exportDislocations){
             spdlog::info("Writing dislocations data");
@@ -350,6 +389,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 structureAnalysis.get()
             );
         }
+        outputSteps.next();
 
         if(_exportInterfaceMesh){
             spdlog::info("Writing interface mesh data");
@@ -364,6 +404,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 }
             );
         }
+        outputSteps.next();
 
         if(_exportDelaunayTessellation){
             spdlog::info("Writing Delaunay tessellation data");
@@ -371,6 +412,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 outputFile + "_delaunay_tessellation.parquet", tessellation
             );
         }
+        outputSteps.next();
 
         if(_exportStructureIdentification){
             spdlog::info("Writing structure identification data");
@@ -378,6 +420,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 outputFile + "_atoms.parquet", frame, *structureAnalysis
             );
         }
+        outputSteps.next();
 
         if(!coreAtomDislocationIds.empty()){
             std::vector<std::size_t> coreAtoms;
@@ -419,6 +462,7 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
                 }
             );
         }
+        outputSteps.next();
 
         if(_exportCoherentCrystallineRegions){
             spdlog::info("Writing coherent crystalline region data");
