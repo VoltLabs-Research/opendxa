@@ -131,15 +131,11 @@ int structureTypeOf(const StructureContext& context, std::size_t atomIndex){
         : static_cast<int>(StructureType::OTHER);
 }
 
-std::array<std::uint64_t, 3> canonicalFaceKey(
-    DelaunayTessellation::VertexHandle v0,
-    DelaunayTessellation::VertexHandle v1,
-    DelaunayTessellation::VertexHandle v2
-){
+std::array<std::uint64_t, 3> canonicalFaceKey(const std::array<DelaunayTessellation::VertexHandle, 3>& corners){
     std::array<std::uint64_t, 3> key{
-        static_cast<std::uint64_t>(v0),
-        static_cast<std::uint64_t>(v1),
-        static_cast<std::uint64_t>(v2)
+        static_cast<std::uint64_t>(corners[0]),
+        static_cast<std::uint64_t>(corners[1]),
+        static_cast<std::uint64_t>(corners[2])
     };
     std::sort(key.begin(), key.end());
     return key;
@@ -238,21 +234,22 @@ void streamDelaunayTessellationToFile(
         if(!tessellation.isValidCell(cell) || tessellation.isGhostCell(cell)) continue;
         ++primaryTetrahedra;
         for(int face = 0; face < 4; ++face){
-            const auto facet = tessellation.mirrorFacet(cell, face);
-            const auto v0 = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, 0));
-            const auto v1 = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, 1));
-            const auto v2 = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, 2));
-            if(!exportedFaces.insert(canonicalFaceKey(v0, v1, v2)).second) continue;
+            std::array<DelaunayTessellation::VertexHandle, 3> corners;
+            for(int corner = 0; corner < 3; ++corner){
+                corners[corner] = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, corner));
+            }
+            if(!exportedFaces.insert(canonicalFaceKey(corners)).second) continue;
 
-            const bool isBoundary = !tessellation.isValidCell(facet.first) || tessellation.isGhostCell(facet.first);
+            const DelaunayTessellation::CellHandle neighbor = tessellation.mirrorFacet(cell, face).first;
+            const bool isBoundary = !tessellation.isValidCell(neighbor) || tessellation.isGhostCell(neighbor);
             isBoundary ? ++boundaryFacets : ++internalFacets;
 
-            std::array<int,3> faceIdx{};
-            for(int vi = 0; vi < 3; ++vi){
-                const auto h = (vi == 0 ? v0 : vi == 1 ? v1 : v2);
-                auto [it, ins] = vertexMap.emplace(static_cast<uint64_t>(h), static_cast<int>(exportPoints.size()));
-                if(ins) exportPoints.push_back(tessellation.vertexPosition(h));
-                faceIdx[vi] = it->second;
+            std::array<int, 3> faceIdx{};
+            for(int corner = 0; corner < 3; ++corner){
+                const auto handle = corners[corner];
+                auto [it, inserted] = vertexMap.emplace(static_cast<uint64_t>(handle), static_cast<int>(exportPoints.size()));
+                if(inserted) exportPoints.push_back(tessellation.vertexPosition(handle));
+                faceIdx[corner] = it->second;
             }
             exportFaces.push_back({faceIdx, isBoundary});
         }
