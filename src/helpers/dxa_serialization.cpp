@@ -146,16 +146,10 @@ BurgersFamilyMatch classifyBurgersFamily(const Vector3& localBurgers, const std:
     }
 }
 
-std::string structureTypeNameForExport(int structureType){
-    return structureTypeName(structureType);
-}
-
-std::string topologyNameForAtomExport(const StructureAnalysis& structureAnalysis, std::size_t atomIndex, int structureType){
-    if(const Cluster* cluster = structureAnalysis.atomCluster(static_cast<int>(atomIndex));
-       cluster && !cluster->topologyName.empty()){
-        return cluster->topologyName;
-    }
-    return {};
+int structureTypeOf(const StructureContext& context, std::size_t atomIndex){
+    return context.structureTypes
+        ? context.structureTypes->getInt(atomIndex)
+        : static_cast<int>(StructureType::OTHER);
 }
 
 std::array<std::uint64_t, 3> canonicalFaceKey(
@@ -339,38 +333,31 @@ void streamCoherentCrystallineRegionsToFile(
         largestRegionSize = std::max(largestRegionSize, static_cast<int>(indices.size()));
 
     const int assignedAtoms = static_cast<int>(context.atomCount()) - unassignedAtoms;
-    const int baseAtomFields = 7;
-
-    (void)baseAtomFields;
     json regions = json::array();
     json atomisticExporter = json::object();
     for(const auto& [clusterId, atomIndices] : atomIndicesByCluster){
-        const std::size_t rep = atomIndices.front();
-        const int stype = context.structureTypes ? context.structureTypes->getInt(rep) : static_cast<int>(StructureType::OTHER);
+        const int stype = structureTypeOf(context, atomIndices.front());
         const Cluster* cluster = structureAnalysis.clusterGraph().findCluster(clusterId);
-        const std::string topo = cluster && !cluster->topologyName.empty()
-            ? cluster->topologyName : topologyNameForAtomExport(structureAnalysis, rep, stype);
         const std::string clusterName = "Cluster " + std::to_string(clusterId);
         regions.push_back({
             {"cluster_id", clusterId},
             {"cluster_name", clusterName},
             {"atom_count", static_cast<int64_t>(atomIndices.size())},
             {"structure_id", stype},
-            {"structure_name", structureTypeNameForExport(stype)},
-            {"topology_name", topo}
+            {"structure_name", structureTypeName(stype)},
+            {"topology_name", cluster ? cluster->topologyName : std::string()}
         });
 
         json atoms = json::array();
         for(std::size_t atomIndex : atomIndices){
-            const int astype = context.structureTypes ? context.structureTypes->getInt(atomIndex) : static_cast<int>(StructureType::OTHER);
-            const int clustId = context.atomClusters ? context.atomClusters->getInt(atomIndex) : 0;
+            const int astype = structureTypeOf(context, atomIndex);
             const auto& pos = atomIndex < frame.positions.size() ? frame.positions[atomIndex] : Point3::Origin();
             atoms.push_back({
                 {"id", atomIndex < frame.ids.size() ? frame.ids[atomIndex] : static_cast<int>(atomIndex)},
                 {"pos", {pos.x(), pos.y(), pos.z()}},
                 {"structure_id", astype},
-                {"structure_name", structureTypeNameForExport(astype)},
-                {"cluster_id", clustId}
+                {"structure_name", structureTypeName(astype)},
+                {"cluster_id", clusterId}
             });
         }
         atomisticExporter[clusterName] = std::move(atoms);
@@ -622,7 +609,7 @@ void streamDislocationsToFile(
             c.crystalStructure = chunkCluster
                 ? (!chunkCluster->topologyName.empty()
                     ? chunkCluster->topologyName
-                    : structureTypeNameForExport(chunkCluster->structure))
+                    : structureTypeName(chunkCluster->structure))
                 : std::string();
             const BurgersFamilyMatch family = Detail::classifyBurgersFamily(c.burgersLocal, c.crystalStructure);
             c.burgersFamily = family.name;
@@ -756,10 +743,7 @@ void streamDislocationsToFile(
         const std::size_t atomCount = structureContext.atomCount();
         std::map<int, std::int64_t> structureCounts;
         for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
-            const int structureType = structureContext.structureTypes
-                ? structureContext.structureTypes->getInt(atomIndex)
-                : static_cast<int>(StructureType::OTHER);
-            structureCounts[structureType]++;
+            structureCounts[structureTypeOf(structureContext, atomIndex)]++;
         }
 
         const double atomsForFraction = atomCount > 0 ? static_cast<double>(atomCount) : 1.0;
@@ -767,7 +751,7 @@ void streamDislocationsToFile(
         for(const auto& [structureType, count] : structureCounts){
             structureRows.push_back({
                 {"structure_id", structureType},
-                {"structure_name", structureTypeNameForExport(structureType)},
+                {"structure_name", structureTypeName(structureType)},
                 {"count", count},
                 {"fraction", static_cast<double>(count) / atomsForFraction}
             });
