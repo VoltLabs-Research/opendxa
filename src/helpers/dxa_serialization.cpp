@@ -25,9 +25,9 @@
 
 namespace Volt::DxaSerialization {
 
-constexpr const char* kParquetSourceKey = "__parquet_source__";
+namespace {
 
-namespace Detail {
+constexpr const char* kParquetSourceKey = "__parquet_source__";
 
 Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
     if(burgersVector.cluster() == nullptr){
@@ -144,19 +144,11 @@ std::array<std::uint64_t, 3> canonicalFaceKey(
     return key;
 }
 
-}
-
-using namespace Detail;
-
-json getNetworkStatistics(const DislocationNetwork* network, double cellVolume);
-json getJunctionInformation(const DislocationNetwork* network);
-json getCircuitInformation(const DislocationNetwork* network);
-int countJunctions(const DislocationNetwork* network);
-int countDanglingSegments(const DislocationNetwork* network);
-
 // Past this many periodic crossings within one segment, the rest of it is kept as it is.
 constexpr int kMaxCrossingsPerSegment = 10;
 constexpr double kCrossingEpsilon = 1e-9;
+
+}
 
 std::vector<std::vector<Point3>> splitAtPeriodicBoundaries(const std::vector<Point3>& line, const SimulationCell& cell){
     std::vector<std::vector<Point3>> pieces;
@@ -355,19 +347,37 @@ void streamCoherentCrystallineRegionsToFile(
     JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
-json getNetworkStatistics(const DislocationNetwork* network, double cellVolume){
-    json stats;
-    const auto& segments = network->segments();
-    
-    double totalLength = 0.0;
-    int validSegments = 0;
-    
+namespace {
+
+std::array<const DislocationNode*, 2> endNodes(const DislocationSegment& segment){
+    return {&segment.forwardNode(), &segment.backwardNode()};
+}
+
+int countJunctions(const DislocationNetwork& network){
+    int junctions = 0;
+    for(const DislocationSegment* segment : network.segments()){
+        if(!segment) continue;
+        for(const DislocationNode* node : endNodes(*segment)){
+            if(!node->isDangling()) junctions++;
+        }
+    }
+    return junctions / 2;
+}
+
+int countDanglingSegments(const DislocationNetwork& network){
+    return static_cast<int>(std::ranges::count_if(network.segments(), [](const DislocationSegment* segment){
+        return segment && (segment->forwardNode().isDangling() || segment->backwardNode().isDangling());
+    }));
+}
+
+json getNetworkStatistics(const DislocationNetwork& network, double cellVolume){
+    const auto& segments = network.segments();
+
     struct SegmentStats {
         double length = 0.0;
         int count = 0;
     };
-    
-    auto stats_result = tbb::parallel_reduce(
+    const SegmentStats totals = tbb::parallel_reduce(
         tbb::blocked_range<size_t>(0, segments.size()),
         SegmentStats{},
         [&segments](const tbb::blocked_range<size_t>& r, SegmentStats val) -> SegmentStats {
@@ -384,142 +394,80 @@ json getNetworkStatistics(const DislocationNetwork* network, double cellVolume){
             return {a.length + b.length, a.count + b.count};
         }
     );
-    totalLength = stats_result.length;
-    validSegments = stats_result.count;
-    
-    stats = json::array({
-        json{
-        {"total_network_length", totalLength},
-        {"segment_count", validSegments},
+
+    return json::array({json{
+        {"total_network_length", totals.length},
+        {"segment_count", totals.count},
         {"junction_count", countJunctions(network)},
         {"dangling_segments", countDanglingSegments(network)},
-        {"average_segment_length", validSegments > 0 ? totalLength / validSegments : 0.0},
-        {"density", cellVolume > 0 ? totalLength / cellVolume : 0.0},
+        {"average_segment_length", totals.count > 0 ? totals.length / totals.count : 0.0},
+        {"density", cellVolume > 0 ? totals.length / cellVolume : 0.0},
         {"total_segments_including_degenerate", static_cast<int>(segments.size())}
-        }
-    });
-    
-    return stats;
+    }});
 }
 
-json getJunctionInformation(const DislocationNetwork* network){
-    json junctionInfo;
-    const auto& segments = network->segments();
-    
+json getJunctionInformation(const DislocationNetwork& network){
     std::map<int, int> junctionArmDistribution;
     int totalJunctions = 0;
-    
-    for(const auto* segment : segments){
-        if(segment){
-            int forwardArms = segment->forwardNode().countJunctionArms();
-            int backwardArms = segment->backwardNode().countJunctionArms();
-            
-            if(forwardArms > 1){
-                junctionArmDistribution[forwardArms]++;
-                totalJunctions++;
-            }
-            if(backwardArms > 1){
-                junctionArmDistribution[backwardArms]++;
+    for(const DislocationSegment* segment : network.segments()){
+        if(!segment) continue;
+        for(const DislocationNode* node : endNodes(*segment)){
+            const int arms = node->countJunctionArms();
+            if(arms > 1){
+                junctionArmDistribution[arms]++;
                 totalJunctions++;
             }
         }
     }
-    
-    junctionInfo = json::array();
+
+    json junctionInfo = json::array();
     if(junctionArmDistribution.empty()){
         junctionInfo.push_back({
             {"junction_arms", 0},
             {"junction_count", 0},
             {"total_junctions", totalJunctions}
         });
-    }else{
-        for(const auto& [junctionArms, junctionCount] : junctionArmDistribution){
-            junctionInfo.push_back({
-                {"junction_arms", junctionArms},
-                {"junction_count", junctionCount},
-                {"total_junctions", totalJunctions}
-            });
-        }
+        return junctionInfo;
     }
-    
+    for(const auto& [junctionArms, junctionCount] : junctionArmDistribution){
+        junctionInfo.push_back({
+            {"junction_arms", junctionArms},
+            {"junction_count", junctionCount},
+            {"total_junctions", totalJunctions}
+        });
+    }
     return junctionInfo;
 }
 
-json getCircuitInformation(const DislocationNetwork* network){
-    json circuitInfo;
-    const auto& segments = network->segments();
-    
+json getCircuitInformation(const DislocationNetwork& network){
     std::vector<int> edgeCounts;
-    int totalCircuits = 0;
     int danglingCircuits = 0;
     int blockedCircuits = 0;
-    
-    for(const auto* segment : segments){
-        if(segment){
-            if(segment->forwardNode().circuit){
-                auto* circuit = segment->forwardNode().circuit;
-                edgeCounts.push_back(circuit->edgeCount);
-                totalCircuits++;
-                if(circuit->isDangling) danglingCircuits++;
-                if(circuit->isCompletelyBlocked) blockedCircuits++;
-            }
-            
-            if(segment->backwardNode().circuit){
-                auto* circuit = segment->backwardNode().circuit;
-                edgeCounts.push_back(circuit->edgeCount);
-                totalCircuits++;
-                if(circuit->isDangling) danglingCircuits++;
-                if(circuit->isCompletelyBlocked) blockedCircuits++;
-            }
+    for(const DislocationSegment* segment : network.segments()){
+        if(!segment) continue;
+        for(const DislocationNode* node : endNodes(*segment)){
+            const BurgersCircuit* circuit = node->circuit;
+            if(!circuit) continue;
+            edgeCounts.push_back(circuit->edgeCount);
+            if(circuit->isDangling) danglingCircuits++;
+            if(circuit->isCompletelyBlocked) blockedCircuits++;
         }
     }
-    
-    double averageEdgeCount = 0.0;
-    if(!edgeCounts.empty()){
-        averageEdgeCount = std::accumulate(edgeCounts.begin(), edgeCounts.end(), 0.0) / edgeCounts.size();
-    }
-    
-    circuitInfo = json::array({
-        json{
-        {"total_circuits", totalCircuits},
+
+    const double averageEdgeCount = edgeCounts.empty()
+        ? 0.0
+        : std::accumulate(edgeCounts.begin(), edgeCounts.end(), 0.0) / edgeCounts.size();
+
+    return json::array({json{
+        {"total_circuits", static_cast<int>(edgeCounts.size())},
         {"dangling_circuits", danglingCircuits},
         {"blocked_circuits", blockedCircuits},
         {"average_edge_count", averageEdgeCount},
-        {"edge_count_min", edgeCounts.empty() ? 0 : *std::min_element(edgeCounts.begin(), edgeCounts.end())},
-        {"edge_count_max", edgeCounts.empty() ? 0 : *std::max_element(edgeCounts.begin(), edgeCounts.end())}
-        }
-    });
-    
-    return circuitInfo;
+        {"edge_count_min", edgeCounts.empty() ? 0 : *std::ranges::min_element(edgeCounts)},
+        {"edge_count_max", edgeCounts.empty() ? 0 : *std::ranges::max_element(edgeCounts)}
+    }});
 }
 
-
-
-int countJunctions(const DislocationNetwork* network){
-    int junctions = 0;
-    const auto& segments = network->segments();
-    
-    for(const auto* segment : segments){
-        if(segment){
-            if(!segment->forwardNode().isDangling()) junctions++;
-            if(!segment->backwardNode().isDangling()) junctions++;
-        }
-    }
-    
-    return junctions / 2;
-}
-
-int countDanglingSegments(const DislocationNetwork* network){
-    int dangling = 0;
-    const auto& segments = network->segments();
-
-    for(const auto* segment : segments){
-        if(segment && (segment->forwardNode().isDangling() || segment->backwardNode().isDangling())){
-            dangling++;
-        }
-    }
-
-    return dangling;
 }
 
 BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure){
@@ -708,11 +656,11 @@ void streamDislocationsToFile(
     json subListings;
     const double cellVolume = simulationCell ? simulationCell->volume3D() : 0.0;
     if(options.exportDislocationNetworkStats)
-        subListings["network_statistics"] = getNetworkStatistics(network, cellVolume);
+        subListings["network_statistics"] = getNetworkStatistics(*network, cellVolume);
     if(options.exportCircuitInformation)
-        subListings["circuit_information"] = getCircuitInformation(network);
+        subListings["circuit_information"] = getCircuitInformation(*network);
     if(options.exportJunctions)
-        subListings["junction_information"] = getJunctionInformation(network);
+        subListings["junction_information"] = getJunctionInformation(*network);
 
     json burgersFamilies = json::array();
     for(const auto& [familyName, tally] : familySummary){
