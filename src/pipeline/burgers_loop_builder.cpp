@@ -811,10 +811,10 @@ void BurgersLoopBuilder::markCoreCells(DislocationNode& node, const Point3& cent
 	}while(edge != nullptr && edge != node.circuit->firstEdge);
 
 	for(auto candidate : _defectCells->queryOverlapping(capBounds)){
-		const int slot = tessellation.getUserField(candidate);
-		if(slot < 0 || static_cast<std::size_t>(slot) >= _coreCellClaims.size()) continue;
+		const auto slot = claimSlot(candidate);
+		if(!slot) continue;
 
-		CoreCellClaim& claim = _coreCellClaims[slot];
+		CoreCellClaim& claim = _coreCellClaims[*slot];
 		if(claim.node != nullptr) continue;
 
 		std::array<Point3, 4> tetrahedron;
@@ -841,6 +841,13 @@ void BurgersLoopBuilder::markCoreCells(DislocationNode& node, const Point3& cent
 	}
 }
 
+// The cell's index into _coreCellClaims; DefectCellIndex gave the cells it left out a negative one.
+std::optional<std::size_t> BurgersLoopBuilder::claimSlot(DelaunayTessellation::CellHandle cell) const{
+	const int slot = _mesh.tessellation().getUserField(cell);
+	if(slot < 0 || static_cast<std::size_t>(slot) >= _coreCellClaims.size()) return std::nullopt;
+	return static_cast<std::size_t>(slot);
+}
+
 std::vector<int> BurgersLoopBuilder::coreAtomDislocationIds(std::size_t particleCount) const{
 	std::vector<int> ids(particleCount, -1);
 	if(_coreCellClaims.empty()) return ids;
@@ -848,10 +855,10 @@ std::vector<int> BurgersLoopBuilder::coreAtomDislocationIds(std::size_t particle
 	const DelaunayTessellation& tessellation = _mesh.tessellation();
 
 	for(auto cellHandle : tessellation.cells()){
-		const int slot = tessellation.getUserField(cellHandle);
-		if(slot < 0 || static_cast<std::size_t>(slot) >= _coreCellClaims.size()) continue;
+		const auto slot = claimSlot(cellHandle);
+		if(!slot) continue;
 
-		const CoreCellClaim& claim = _coreCellClaims[slot];
+		const CoreCellClaim& claim = _coreCellClaims[*slot];
 		DislocationNode* node = claim.node;
 		if(node == nullptr) continue;
 		if(node->isDangling() && claim.claimedWhileCapStored) continue;

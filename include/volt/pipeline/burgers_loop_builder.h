@@ -86,6 +86,7 @@ private:
 	bool lengthenCircuit(DislocationNode& node, bool markSwept);
 	void appendLinePoint(DislocationNode& node);
 	void markCoreCells(DislocationNode& node, const Point3& center);
+	[[nodiscard]] std::optional<std::size_t> claimSlot(DelaunayTessellation::CellHandle cell) const;
 	void createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength);
 
 	void findPrimarySegments(int maxCircuitLength);
