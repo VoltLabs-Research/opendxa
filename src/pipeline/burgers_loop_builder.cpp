@@ -261,6 +261,61 @@ void unlinkCircuit(BurgersCircuit* circuit){
     }while(edge != circuit->firstEdge);
 }
 
+// Bounds the walk around a vertex, should its fan of facets not close.
+constexpr int kMaxFanSteps = 1000;
+
+// Circuit A enters a vertex over aIn and leaves it over aOut, circuit B over bIn and bOut. Walks the facets around the
+// vertex from bIn towards bOut: A crosses B there when it leaves into that side but did not enter from it.
+bool leavesOtherCircuit(InterfaceMesh::Edge* aIn, InterfaceMesh::Edge* aOut, InterfaceMesh::Edge* bIn, InterfaceMesh::Edge* bOut){
+    const InterfaceMesh::Vertex* vertex = bOut->vertex1();
+    assert(aOut->vertex1() == vertex);
+    assert(aIn->vertex2() == vertex);
+    assert(bIn->vertex2() == vertex);
+
+    bool entersFromSide = false;
+    bool leavesIntoSide = false;
+    InterfaceMesh::Edge* edge = bIn;
+    for(int steps = 0; ; ){
+        InterfaceMesh::Edge* nextEdge = edge->nextFaceEdge();
+        if(nextEdge == bOut) break;
+        InterfaceMesh::Edge* oppositeEdge = nextEdge->oppositeEdge();
+        if(oppositeEdge->vertex2() != vertex) break;
+
+        edge = oppositeEdge;
+        if(edge == aIn) entersFromSide = true;
+        if(nextEdge == aOut) leavesIntoSide = true;
+        if(++steps > kMaxFanSteps) break;
+    }
+    return leavesIntoSide && !entersFromSide;
+}
+
+// Whether a circuit through the vertex where circuit edge edge1 ends and edge2 starts crosses that circuit there.
+bool crossedAtVertex(InterfaceMesh::Edge* edge1, InterfaceMesh::Edge* edge2){
+    InterfaceMesh::Edge* sentinel = edge1->oppositeEdge();
+    InterfaceMesh::Edge* edge = sentinel;
+    do{
+        InterfaceMesh::Edge* incoming = edge->prevFaceEdge();
+        const bool circuitPassesThrough = incoming->circuit && incoming->nextCircuitEdge
+            && incoming->nextCircuitEdge->vertex1() == incoming->vertex2();
+        if(circuitPassesThrough && edge2->oppositeEdge()
+           && leavesOtherCircuit(edge2->oppositeEdge(), edge1->oppositeEdge(), incoming, incoming->nextCircuitEdge)){
+            return true;
+        }
+        edge = incoming->oppositeEdge();
+    }while(edge != sentinel);
+    return false;
+}
+
+bool intersectsOtherCircuits(const BurgersCircuit* circuit){
+    InterfaceMesh::Edge* edge1 = circuit->firstEdge;
+    do{
+        InterfaceMesh::Edge* edge2 = edge1->nextCircuitEdge;
+        if(edge1 != edge2->oppositeEdge() && crossedAtVertex(edge1, edge2)) return true;
+        edge1 = edge2;
+    }while(edge1 != circuit->firstEdge);
+    return false;
+}
+
 }
 
 void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
@@ -363,51 +418,6 @@ void BurgersLoopBuilder::createAndTraceSegment(const ClusterVector& burgersVecto
 
 	traceSegment(*segment, segment->forwardNode(), maxCircuitLength, true);
 	traceSegment(*segment, segment->backwardNode(), maxCircuitLength, true);
-}
-
-bool BurgersLoopBuilder::intersectsOtherCircuits(BurgersCircuit* circuit){
-    InterfaceMesh::Edge* startEdge1 = circuit->firstEdge;
-    for(InterfaceMesh::Edge* edge1 = startEdge1; ; edge1 = edge1->nextCircuitEdge){
-        InterfaceMesh::Edge* edge2 = edge1->nextCircuitEdge;
-
-        if(edge1 != edge2->oppositeEdge()){
-            InterfaceMesh::Edge* sentinel = edge1->oppositeEdge();
-            InterfaceMesh::Edge* cur = sentinel;
-
-            do{
-                InterfaceMesh::Edge* prev = cur->prevFaceEdge();
-                if(prev->circuit){
-                    int goingOutside = 0;
-					int goingInside = 0;
-                    
-                    if(prev->nextCircuitEdge && 
-                       edge2->oppositeEdge() && 
-                       edge1->oppositeEdge() &&
-                       prev->nextCircuitEdge->vertex1() == prev->vertex2()) {
-                        circuitCircuitIntersection(
-                            edge2->oppositeEdge(),
-                            edge1->oppositeEdge(),
-                            prev,
-                            prev->nextCircuitEdge,
-                            goingOutside,
-                            goingInside
-                        );
-
-                        if(goingOutside){
-                            return true;
-                        }
-                    }
-                }
-                cur = prev->oppositeEdge();
-            }while (cur != sentinel);
-        }
-
-        if(edge2 == startEdge1){
-            break;
-        }
-    }
-
-    return false;
 }
 
 BurgersCircuit* BurgersLoopBuilder::buildReverseCircuit(BurgersCircuit* forwardCircuit){
@@ -882,81 +892,6 @@ std::vector<int> BurgersLoopBuilder::coreAtomDislocationIds(std::size_t particle
 	}
 
 	return ids;
-}
-
-void BurgersLoopBuilder::circuitCircuitIntersection(
-	InterfaceMesh::Edge* circuitAEdge1, 
-	InterfaceMesh::Edge* circuitAEdge2, 
-	InterfaceMesh::Edge* circuitBEdge1, 
-	InterfaceMesh::Edge* circuitBEdge2, 
-	int& goingOutside, 
-	int& goingInside
-){
-	assert(circuitAEdge2->vertex1() == circuitBEdge2->vertex1());
-	assert(circuitAEdge1->vertex2() == circuitBEdge2->vertex1());
-	assert(circuitBEdge1->vertex2() == circuitBEdge2->vertex1());
-
-	InterfaceMesh::Edge* edge = circuitBEdge2;
-	bool contour1inside = false;
-	bool contour2inside = false;
-	int safetyCounter = 0;
-	const int maxEdgeTraversal = 1000;
-	
-	for(;;){
-		InterfaceMesh::Edge* oppositeEdge = edge->oppositeEdge();
-		if(oppositeEdge == circuitBEdge1) break;
-		if(edge != circuitBEdge2){
-			if(oppositeEdge == circuitAEdge1) contour1inside = true;
-			if(edge == circuitAEdge2) contour2inside = true;
-		}
-
-		edge = oppositeEdge->nextFaceEdge();
-		if(edge->vertex1() != circuitBEdge2->vertex1() || edge == circuitBEdge2){
-			break;
-		}
-		
-		if(++safetyCounter > maxEdgeTraversal) break;
-	}
-	
-	if(circuitAEdge2 != circuitBEdge2) {
-	} else {
-		contour2inside = false;
-	}
-
-	bool contour1outside = false;
-	bool contour2outside = false;
-	edge = circuitBEdge1;
-	safetyCounter = 0;
-	
-	for(;;){
-		InterfaceMesh::Edge* nextEdge = edge->nextFaceEdge();
-		if(nextEdge == circuitBEdge2) break;
-		InterfaceMesh::Edge* oppositeEdge = nextEdge->oppositeEdge();
-		
-		if(oppositeEdge->vertex2() != circuitBEdge2->vertex1()) {
-			break;
-		}
-		
-		edge = oppositeEdge;
-		if(edge == circuitAEdge1) contour1outside = true;
-		if(nextEdge == circuitAEdge2) contour2outside = true;
-		
-		if(++safetyCounter > 1000) break;
-	}
-
-	if(contour1outside && contour1inside) {
-		contour1inside = false;
-	}
-	
-	if(contour2outside && contour2inside) {
-		contour2inside = false;
-	}
-
-	if(contour2outside == true && contour1outside == false){
-		goingOutside += 1;
-	}else if(contour2inside == true && contour1inside == false){
-		goingInside += 1;
-	}
 }
 
 void BurgersLoopBuilder::joinSegments(int maxCircuitLength){
