@@ -489,9 +489,7 @@ BurgersCircuit* BurgersLoopBuilder::buildReverseCircuit(BurgersCircuit* forwardC
 		assert((edge2->clusterVector + oppositeEdge2->clusterTransition->tm * oppositeEdge2->clusterVector).isZero(CA_LATTICE_VECTOR_EPSILON));
 
 		if(facet1 != facet2){
-			InterfaceMesh::Edge* outerEdge1 = oppositeEdge1->nextFaceEdge()->oppositeEdge();
 			InterfaceMesh::Edge* innerEdge1 = oppositeEdge1->prevFaceEdge()->oppositeEdge();
-			InterfaceMesh::Edge* outerEdge2 = oppositeEdge2->prevFaceEdge()->oppositeEdge();
 			InterfaceMesh::Edge* innerEdge2 = oppositeEdge2->nextFaceEdge()->oppositeEdge();
 			assert(innerEdge1 != nullptr && innerEdge2 != nullptr);
 			assert(innerEdge1->vertex1() == edge1->vertex2());
@@ -1259,7 +1257,6 @@ void BurgersLoopBuilder::createSecondarySegment(InterfaceMesh::Edge* firstEdge, 
 		for(;;){
 			assert(edge->circuit == nullptr);
 			InterfaceMesh::Edge* oppositeEdge = edge->oppositeEdge();
-			InterfaceMesh::Face* oppositeFacet = oppositeEdge->face();
 			InterfaceMesh::Edge* nextEdge = oppositeEdge->prevFaceEdge();
 			assert(nextEdge->vertex2() == oppositeEdge->vertex1());
 			assert(nextEdge->vertex2() == edge->vertex2());
