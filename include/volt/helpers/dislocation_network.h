@@ -128,8 +128,6 @@ struct DislocationSegment{
 		std::ranges::reverse(line);
 		std::ranges::reverse(coreSize);
 	}
-
-	[[nodiscard]] Point3 getPointOnLine(double t) const;
 };
 
 inline bool DislocationNode::isForwardNode() const{

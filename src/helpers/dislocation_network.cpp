@@ -177,27 +177,5 @@ void DislocationNetwork::smoothDislocationLine(double smoothingLevel, std::vecto
 		}
 	}
 }
-[[nodiscard]] Point3 DislocationSegment::getPointOnLine(double t) const{
-	if(line.empty() || isDegenerate()){
-				return Point3::Origin();
-	}
-
-	t *= calculateLength();
-	double sum = 0;
-
-	for(auto i1 = line.begin(); std::next(i1) != line.end(); ++i1){
-		const auto i2 = std::next(i1);
-		const auto delta = *i2 - *i1;
-		const auto len = delta.length();
-
-		if(len != 0 && sum + len >= t){
-			return *i1 + ((t - sum) / len) * delta;
-		}
-
-		sum += len;
-	}
-
-	return line.back();
-}
 
 }
