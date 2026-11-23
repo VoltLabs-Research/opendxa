@@ -250,6 +250,17 @@ std::vector<InterfaceMesh::Edge*> findClosingEdges(const std::vector<InterfaceMe
     return closingEdges;
 }
 
+// Frees the edges of a rejected circuit for later searches.
+void unlinkCircuit(BurgersCircuit* circuit){
+    InterfaceMesh::Edge* edge = circuit->firstEdge;
+    do{
+        InterfaceMesh::Edge* nextEdge = edge->nextCircuitEdge;
+        edge->nextCircuitEdge = nullptr;
+        edge->circuit = nullptr;
+        edge = nextEdge;
+    }while(edge != circuit->firstEdge);
+}
+
 }
 
 void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
@@ -260,14 +271,17 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
     for(InterfaceMesh::Edge* closingEdge : findClosingEdges(mesh().vertices(), searchDepth)){
         if(closingEdge->circuit != nullptr) continue;
         search.run(closingEdge->vertex1(), searchDepth, [&](InterfaceMesh::Edge* edge, SearchNode* from, SearchNode* reached){
-            return createBurgersCircuitOriginal(edge, from, reached, maxBurgersCircuitSize);
+            return createPrimaryCircuit(edge, from, reached, maxBurgersCircuitSize);
         });
     }
 }
 
-bool BurgersLoopBuilder::createBurgersCircuitOriginal(InterfaceMesh::Edge* edge, SearchNode* currentStruct, SearchNode* neighborStruct, int maxBurgersCircuitSize){
+// Builds the circuit that edge closes, out of the search paths that reach its two ends, and starts a segment from it if
+// it encloses a dislocation. Returns whether to stop searching from this start vertex: once a segment was started, or
+// when the circuit crosses an existing one, whose dislocation is already being traced.
+bool BurgersLoopBuilder::createPrimaryCircuit(InterfaceMesh::Edge* edge, SearchNode* from, SearchNode* reached, int maxBurgersCircuitSize){
 	if(edge->circuit != nullptr) return false;
-	assert(currentStruct != neighborStruct);
+	assert(from != reached);
 
 	BurgersCircuit* forwardCircuit = allocateCircuit();
 	forwardCircuit->edgeCount = 1;
@@ -275,32 +289,22 @@ bool BurgersLoopBuilder::createBurgersCircuitOriginal(InterfaceMesh::Edge* edge,
 	assert(forwardCircuit->firstEdge->circuit == nullptr);
 	forwardCircuit->firstEdge->circuit = forwardCircuit;
 
-	std::unordered_set<InterfaceMesh::Vertex*> firstBranchSet;
-	for(SearchNode* a = currentStruct; ; a = a->parent){
-		firstBranchSet.insert(a->vertex);
-		if(a->viaEdge == nullptr) break;
+	std::unordered_set<InterfaceMesh::Vertex*> fromPath;
+	for(SearchNode* a = from; a != nullptr; a = a->parent){
+		fromPath.insert(a->vertex);
 	}
 
-	for(SearchNode* a = neighborStruct; ; a = a->parent){
-		if(firstBranchSet.count(a->vertex)) break;
-		assert(a->viaEdge != nullptr);
-		assert(a->viaEdge->circuit == nullptr);
-		a->viaEdge->nextCircuitEdge = forwardCircuit->firstEdge;
-		forwardCircuit->firstEdge = a->viaEdge;
+	SearchNode* meet = reached;
+	for(; !fromPath.count(meet->vertex); meet = meet->parent){
+		assert(meet->viaEdge != nullptr);
+		assert(meet->viaEdge->circuit == nullptr);
+		meet->viaEdge->nextCircuitEdge = forwardCircuit->firstEdge;
+		forwardCircuit->firstEdge = meet->viaEdge;
 		forwardCircuit->edgeCount++;
 		forwardCircuit->firstEdge->circuit = forwardCircuit;
 	}
 
-	InterfaceMesh::Vertex* meetNode = nullptr;
-	for(SearchNode* a = neighborStruct; ; a = a->parent){
-		if(firstBranchSet.count(a->vertex)){
-			meetNode = a->vertex;
-			break;
-		}
-		if(a->viaEdge == nullptr) break;
-	}
-
-	for(SearchNode* a = currentStruct; a->vertex != meetNode; a = a->parent){
+	for(SearchNode* a = from; a->vertex != meet->vertex; a = a->parent){
 		assert(a->viaEdge != nullptr);
 		assert(a->viaEdge->oppositeEdge()->circuit == nullptr);
 		forwardCircuit->lastEdge->nextCircuitEdge = a->viaEdge->oppositeEdge();
@@ -331,13 +335,7 @@ bool BurgersLoopBuilder::createBurgersCircuitOriginal(InterfaceMesh::Edge* edge,
 	const bool zeroBurgers = b.isZero(CA_LATTICE_VECTOR_EPSILON);
 	const bool badEdgeSum = !edgeSum.isZero(CA_ATOM_VECTOR_EPSILON);
 	if(zeroBurgers || badEdgeSum || intersects){
-		e = forwardCircuit->firstEdge;
-		do{
-			InterfaceMesh::Edge* nextEdge = e->nextCircuitEdge;
-			e->nextCircuitEdge = nullptr;
-			e->circuit = nullptr;
-			e = nextEdge;
-		}while(e != forwardCircuit->firstEdge);
+		unlinkCircuit(forwardCircuit);
 		discardCircuit(forwardCircuit);
 		return intersects;
 	}
