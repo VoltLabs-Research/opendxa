@@ -31,7 +31,7 @@ BurgersCircuit* BurgersLoopBuilder::allocateCircuit(){
     return circuit;
 }
 
-bool BurgersLoopBuilder::traceDislocationSegments(){
+void BurgersLoopBuilder::traceDislocationSegments(){
     mesh().clearFaceFlag(0);
 
     if(_markCoreAtoms){
@@ -54,11 +54,9 @@ bool BurgersLoopBuilder::traceDislocationSegments(){
         }
 
         if((L & 1) && L <= _maxBurgersCircuitSize){
-            if(!findPrimarySegments(L)){
-                return false;
-            }
+            findPrimarySegments(L);
         }
-        (void) joinSegments(L);
+        joinSegments(L);
 
         if(L >= _maxBurgersCircuitSize && !dangling.empty()){
             tbb::parallel_for_each(dangling.begin(), dangling.end(), [&](DislocationNode* node){
@@ -71,8 +69,6 @@ bool BurgersLoopBuilder::traceDislocationSegments(){
         }
         progress.update(static_cast<std::uint64_t>(L - 2));
     }
-
-    return true;
 }
 
 void BurgersLoopBuilder::discardCircuit(BurgersCircuit* circuit){
@@ -152,7 +148,7 @@ struct BurgersCircuitSearchStruct{
 
 using SearchNode = BurgersLoopBuilder::SearchNode;
 
-bool BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
+void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
     const int searchDepth = (maxBurgersCircuitSize - 1) / 2;
     assert(searchDepth >= 1);
 
@@ -312,8 +308,6 @@ bool BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
         }
         pool.clear(true);
     }
-
-    return true;
 }
 
 bool BurgersLoopBuilder::createBurgersCircuitOriginal(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize){
@@ -1043,7 +1037,7 @@ void BurgersLoopBuilder::circuitCircuitIntersection(
 	}
 }
 
-size_t BurgersLoopBuilder::joinSegments(int maxCircuitLength){
+void BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 	for(size_t nodeIndex = 0; nodeIndex < danglingNodes().size(); nodeIndex++){
 		DislocationNode* node = danglingNodes()[nodeIndex];
 		BurgersCircuit* circuit = node->circuit;
@@ -1090,8 +1084,6 @@ size_t BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 			edge = edge->nextCircuitEdge;
 		}while(edge != circuit->firstEdge);
 	}
-
-	size_t numJunctions = 0;
 
 	for(DislocationNode* node : danglingNodes()){
 		BurgersCircuit* circuit = node->circuit;
@@ -1151,7 +1143,6 @@ size_t BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 				armNode->circuit->numPreliminaryPoints = 0;
 				armNode = armNode->junctionRing;
 			}while(armNode != node);
-			numJunctions++;
 		}else{
 			DislocationNode* node1 = node;
 			DislocationNode* node2 = node->junctionRing;
@@ -1237,8 +1228,6 @@ size_t BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 	_danglingNodes.erase(std::remove_if(_danglingNodes.begin(), _danglingNodes.end(),[](DislocationNode* node){
 		return !node->isDangling();
 	}), _danglingNodes.end());
-
-	return numJunctions;
 }
 
 void BurgersLoopBuilder::createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength){

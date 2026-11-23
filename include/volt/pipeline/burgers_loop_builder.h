@@ -51,7 +51,7 @@ public:
 		return mesh().structureAnalysis().context().simCell;
 	}
 
-	bool traceDislocationSegments();
+	void traceDislocationSegments();
 	void finishDislocationSegments(std::string_view referenceTopologyName);
 
 	const std::vector<DislocationNode*>& danglingNodes() const{
@@ -84,7 +84,7 @@ private:
 	void circuitCircuitIntersection(InterfaceMesh::Edge* circuitAEdge1, InterfaceMesh::Edge* circuitAEdge2, InterfaceMesh::Edge* circuitBEdge1, InterfaceMesh::Edge* circuitBEdge2, int& goingOutside, int& goingInside);
 	void createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength);
 
-	bool findPrimarySegments(int maxBurgersCircuitSize);
+	void findPrimarySegments(int maxBurgersCircuitSize);
 	bool createBurgersCircuitOriginal(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize);
 	bool intersectsOtherCircuits(BurgersCircuit* circuit);
 	bool tryRemoveTwoCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2);
@@ -93,7 +93,7 @@ private:
 	bool trySweepTwoFacets(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2, bool isPrimarySegment);
 	bool tryInsertOneCircuitEdge(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, bool isPrimarySegment);
 
-	size_t joinSegments(int maxCircuitLength);
+	void joinSegments(int maxCircuitLength);
 
 	Vector3 calculateShiftVector(const Point3& a, const Point3& b) const{
 		Vector3 d = cell().absoluteToReduced(b - a);
