@@ -36,10 +36,10 @@ std::vector<std::vector<Point3>> splitAtPeriodicBoundaries(const std::vector<Poi
 void streamDislocationsToFile(
     const std::string& linesFilePath,
     const std::string& summaryFilePath,
-    const DislocationNetwork* network,
-    const SimulationCell* simulationCell = nullptr,
-    const DislocationsExportOptions& options = {},
-    const StructureAnalysis* structureAnalysis = nullptr
+    const DislocationNetwork& network,
+    const SimulationCell& simulationCell,
+    const DislocationsExportOptions& options,
+    const StructureAnalysis& structureAnalysis
 );
 
 struct InterfaceMeshFlags{

@@ -3,7 +3,6 @@
 #include <volt/helpers/burgers_circuit.h>
 #include <volt/structures/crystal_structure_types.h>
 #include <cassert>
-#include <cstdio>
 #include <numeric>
 #include <unordered_set>
 #include <unordered_map>
@@ -20,6 +19,7 @@
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
 #include <spdlog/spdlog.h>
+#include <fmt/format.h>
 #include <filesystem>
 #include <fstream>
 
@@ -493,210 +493,277 @@ BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::stri
     }
 }
 
-void streamDislocationsToFile(
-    const std::string& linesFilePath,
-    const std::string& summaryFilePath,
-    const DislocationNetwork* network,
-    const SimulationCell* simulationCell,
-    const DislocationsExportOptions& options,
-    const StructureAnalysis* structureAnalysis
-){
-    const auto& segments = network->segments();
-    std::vector<const DislocationSegment*> validSegments;
-    validSegments.reserve(segments.size());
-    for(const auto* seg : segments){
-        if(seg && !seg->isDegenerate()) validSegments.push_back(seg);
-    }
+namespace {
 
-    struct Chunk{
-        std::vector<Point3> points;
-        double length;
-        Vector3 burgersLocal;
-        Vector3 burgersGlobal;
-        double magnitude;
-        int clusterId = 0;
-        int segmentId = -1;
-        std::string crystalStructure;
-        std::string burgersFamily;
-        std::string burgersFamilyLabel;
-    };
-    std::vector<Chunk> chunks;
-    chunks.reserve(validSegments.size() * 2);
+// What every piece of a dislocation segment shares, computed once per segment.
+struct SegmentProperties{
+    Vector3 burgersLocal;
+    Vector3 burgersGlobal;
+    double magnitude;
+    int clusterId;
+    int segmentId;
+    std::string crystalStructure;
+    BurgersFamily family;
+};
 
+struct DislocationLine{
+    std::vector<Point3> points;
+    double length;
+    SegmentProperties segment;
+};
+
+struct FamilyTally{
+    std::string label;
+    int segmentCount = 0;
+    double totalLength = 0.0;
+};
+
+struct LineSummary{
     double totalLength = 0;
     int totalPoints = 0;
-    double maxLength = 0, minLength = std::numeric_limits<double>::max();
-    std::map<std::string, std::pair<int, double>> burgersSummary;
+    double minLength = 0;
+    double meanLength = 0;
+    double maxLength = 0;
+    std::map<std::string, FamilyTally> byBurgersVector;
+    std::map<std::string, FamilyTally> byFamily;
+};
 
-    struct FamilyTally {
-        std::string label;
-        int segmentCount = 0;
-        double totalLength = 0.0;
-    };
-    std::map<std::string, FamilyTally> familySummary;
+std::vector<const DislocationSegment*> nonDegenerateSegments(const DislocationNetwork& network){
+    std::vector<const DislocationSegment*> segments;
+    segments.reserve(network.segments().size());
+    for(const auto* segment : network.segments()){
+        if(segment && !segment->isDegenerate()) segments.push_back(segment);
+    }
+    return segments;
+}
 
-    for(const auto* segment : validSegments){
-        auto emitChunk = [&](const std::vector<Point3>& pts){
-            double len = 0;
-            for(size_t i = 1; i < pts.size(); ++i)
-                len += (pts[i] - pts[i-1]).length();
+// The name the Burgers family is looked up by: the cluster's topology, or its structure type when the topology
+// has no name.
+std::string crystalStructureOf(const Cluster* cluster){
+    if(!cluster) return {};
+    return !cluster->topologyName.empty() ? cluster->topologyName : std::string(structureTypeName(cluster->structure));
+}
 
-            Chunk c;
-            c.points = pts;
-            c.length = len;
-            c.burgersLocal = segment->burgersVector.localVec();
-            c.burgersGlobal = getGlobalBurgersVector(segment->burgersVector);
-            c.magnitude = c.burgersLocal.length();
-            const Cluster* chunkCluster = segment->burgersVector.cluster();
-            c.clusterId = chunkCluster ? chunkCluster->id : 0;
-            c.segmentId = segment->id;
-            c.crystalStructure = chunkCluster
-                ? (!chunkCluster->topologyName.empty()
-                    ? chunkCluster->topologyName
-                    : structureTypeName(chunkCluster->structure))
-                : std::string();
-            const BurgersFamily family = classifyBurgersFamily(c.burgersLocal, c.crystalStructure);
-            c.burgersFamily = family.name;
-            c.burgersFamilyLabel = family.label;
-            const std::string summaryKey = c.burgersFamily != "Other"
-                ? c.burgersFamilyLabel
-                : burgersVectorLabel(c.burgersLocal);
-            chunks.push_back(std::move(c));
+SegmentProperties segmentProperties(const DislocationSegment& segment){
+    const Cluster* cluster = segment.burgersVector.cluster();
+    SegmentProperties properties;
+    properties.burgersLocal = segment.burgersVector.localVec();
+    properties.burgersGlobal = getGlobalBurgersVector(segment.burgersVector);
+    properties.magnitude = properties.burgersLocal.length();
+    properties.clusterId = cluster ? cluster->id : 0;
+    properties.segmentId = segment.id;
+    properties.crystalStructure = crystalStructureOf(cluster);
+    properties.family = classifyBurgersFamily(properties.burgersLocal, properties.crystalStructure);
+    return properties;
+}
 
-            totalLength += len;
-            totalPoints += pts.size();
-            maxLength = std::max(maxLength, len);
-            minLength = std::min(minLength, len);
-            auto& s = burgersSummary[summaryKey];
-            s.first++; s.second += len;
+double polylineLength(const std::vector<Point3>& points){
+    double length = 0;
+    for(size_t i = 1; i < points.size(); ++i){
+        length += (points[i] - points[i - 1]).length();
+    }
+    return length;
+}
 
-            auto& familyTally = familySummary[chunks.back().burgersFamily];
-            familyTally.label = chunks.back().burgersFamilyLabel;
-            familyTally.segmentCount++;
-            familyTally.totalLength += len;
+std::vector<DislocationLine> collectLines(
+    const std::vector<const DislocationSegment*>& segments,
+    const SimulationCell& cell,
+    bool clipPbcSegments
+){
+    std::vector<DislocationLine> lines;
+    lines.reserve(segments.size() * 2);
+    for(const DislocationSegment* segment : segments){
+        const SegmentProperties properties = segmentProperties(*segment);
+        auto addLine = [&](std::vector<Point3> points){
+            const double length = polylineLength(points);
+            lines.push_back({std::move(points), length, properties});
         };
-
-        if(simulationCell && options.clipPbcSegments){
-            for(const auto& piece : splitAtPeriodicBoundaries(segment->line, *simulationCell)){
-                emitChunk(piece);
+        if(clipPbcSegments){
+            for(auto& piece : splitAtPeriodicBoundaries(segment->line, cell)){
+                addLine(std::move(piece));
             }
-        }else{
-            if(!segment->line.empty())
-                emitChunk(std::vector<Point3>(segment->line.begin(), segment->line.end()));
+        }else if(!segment->line.empty()){
+            addLine(segment->line);
         }
     }
-    if(chunks.empty()) minLength = 0;
+    return lines;
+}
 
-    if(validSegments.size() < segments.size()){
-        spdlog::info("  Skipped {} degenerate segments (fewer than two points)", segments.size() - validSegments.size());
+// Lines of a named family are charted under its label, the others under their own Burgers vector.
+std::string burgersChartKey(const SegmentProperties& segment){
+    return segment.family.name != OTHER_BURGERS_FAMILY.name
+        ? segment.family.label
+        : burgersVectorLabel(segment.burgersLocal);
+}
+
+void addToTally(FamilyTally& tally, double length){
+    tally.segmentCount++;
+    tally.totalLength += length;
+}
+
+LineSummary summarizeLines(const std::vector<DislocationLine>& lines){
+    LineSummary summary;
+    double minLength = std::numeric_limits<double>::max();
+    for(const DislocationLine& line : lines){
+        summary.totalLength += line.length;
+        summary.totalPoints += line.points.size();
+        summary.maxLength = std::max(summary.maxLength, line.length);
+        minLength = std::min(minLength, line.length);
+        addToTally(summary.byBurgersVector[burgersChartKey(line.segment)], line.length);
+        FamilyTally& family = summary.byFamily[line.segment.family.name];
+        family.label = line.segment.family.label;
+        addToTally(family, line.length);
+    }
+    summary.minLength = lines.empty() ? 0 : minLength;
+    summary.meanLength = lines.empty() ? 0.0 : summary.totalLength / lines.size();
+    return summary;
+}
+
+void logLineSummary(std::size_t skippedSegments, std::size_t lineCount, const LineSummary& summary, bool clipped){
+    if(skippedSegments > 0){
+        spdlog::info("  Skipped {} degenerate segments (fewer than two points)", skippedSegments);
     }
     spdlog::info(
         "  {} dislocation lines{} ({} points), length min {:.2f} / mean {:.2f} / max {:.2f}",
-        chunks.size(), simulationCell && options.clipPbcSegments ? " after PBC clipping" : "", totalPoints,
-        minLength, chunks.empty() ? 0.0 : totalLength / chunks.size(), maxLength
+        lineCount, clipped ? " after PBC clipping" : "", summary.totalPoints,
+        summary.minLength, summary.meanLength, summary.maxLength
     );
-    if(!familySummary.empty()){
-        std::string families;
-        for(const auto& entry : familySummary){
-            const FamilyTally& tally = entry.second;
-            char share[48];
-            std::snprintf(share, sizeof(share), " %d (%.1f%%)", tally.segmentCount,
-                totalLength > 0 ? 100.0 * tally.totalLength / totalLength : 0.0);
-            if(!families.empty()) families += ", ";
-            families += tally.label;
-            families += share;
-        }
-        spdlog::info("  Burgers vector families (lines, % of length): {}", families);
-    }
+    if(summary.byFamily.empty()) return;
 
+    std::string families;
+    for(const auto& [_, tally] : summary.byFamily){
+        if(!families.empty()) families += ", ";
+        families += fmt::format("{} {} ({:.1f}%)", tally.label, tally.segmentCount,
+            summary.totalLength > 0 ? 100.0 * tally.totalLength / summary.totalLength : 0.0);
+    }
+    spdlog::info("  Burgers vector families (lines, % of length): {}", families);
+}
+
+void writeLinesTable(const std::string& filePath, const std::vector<DislocationLine>& lines){
     auto vecAsList = [](const Vector3& v){ return std::vector<double>{v.x(), v.y(), v.z()}; };
     auto pointAsList = [](const Point3& p){ return std::vector<double>{p.x(), p.y(), p.z()}; };
     streamLinesToParquet(
-        linesFilePath,
-        chunks.size(),
-        [&](std::size_t i, std::vector<Point3>& outPoints){ outPoints = chunks[i].points; },
+        filePath,
+        lines.size(),
+        [&](std::size_t i, std::vector<Point3>& outPoints){ outPoints = lines[i].points; },
         [&](ColumnarLineWriter& writer, std::size_t i){
-            const auto& c = chunks[i];
-            writer.field("length", c.length);
-            writer.field("num_points", static_cast<std::int64_t>(c.points.size()));
-            writer.field("magnitude", c.magnitude);
-            writer.field("burgers_vector_local", vecAsList(c.burgersLocal));
-            writer.field("burgers_vector_global", vecAsList(c.burgersGlobal));
-            writer.field("crystal_structure", c.crystalStructure);
-            writer.field("burgers_family", c.burgersFamily);
-            writer.field("burgers_family_label", c.burgersFamilyLabel);
-            writer.field("cluster_id", static_cast<std::int64_t>(c.clusterId));
-            writer.field("segment_id", static_cast<std::int64_t>(c.segmentId));
-            writer.field("head_vertex", pointAsList(c.points.empty() ? Point3::Origin() : c.points.front()));
-            writer.field("tail_vertex", pointAsList(c.points.empty() ? Point3::Origin() : c.points.back()));
+            const DislocationLine& line = lines[i];
+            const SegmentProperties& segment = line.segment;
+            writer.field("length", line.length);
+            writer.field("num_points", static_cast<std::int64_t>(line.points.size()));
+            writer.field("magnitude", segment.magnitude);
+            writer.field("burgers_vector_local", vecAsList(segment.burgersLocal));
+            writer.field("burgers_vector_global", vecAsList(segment.burgersGlobal));
+            writer.field("crystal_structure", segment.crystalStructure);
+            writer.field("burgers_family", segment.family.name);
+            writer.field("burgers_family_label", segment.family.label);
+            writer.field("cluster_id", static_cast<std::int64_t>(segment.clusterId));
+            writer.field("segment_id", static_cast<std::int64_t>(segment.segmentId));
+            writer.field("head_vertex", pointAsList(line.points.empty() ? Point3::Origin() : line.points.front()));
+            writer.field("tail_vertex", pointAsList(line.points.empty() ? Point3::Origin() : line.points.back()));
         }
     );
+}
 
+json burgersVectorChart(const LineSummary& summary){
     json burgersLabels = json::array(), segmentCounts = json::array(), burgersLengths = json::array();
-    for(const auto& [label, s] : burgersSummary){
+    for(const auto& [label, tally] : summary.byBurgersVector){
         burgersLabels.push_back(label);
-        segmentCounts.push_back(s.first);
-        burgersLengths.push_back(s.second);
+        segmentCounts.push_back(tally.segmentCount);
+        burgersLengths.push_back(tally.totalLength);
     }
-
-    json doc;
-    doc["export"]["ChartExporter"] = {
+    return {
         {"burgers_counts", {{"burgers_vector", burgersLabels}, {"segment_count", segmentCounts}}},
         {"burgers_lengths", {{"burgers_vector", burgersLabels}, {"total_length", burgersLengths}}}
     };
-    doc["main_listing"] = {
-        {"dislocations", static_cast<int64_t>(chunks.size())},
-        {"total_points", static_cast<int64_t>(totalPoints)},
-        {"average_segment_length", chunks.empty() ? 0.0 : totalLength / chunks.size()},
-        {"max_segment_length", maxLength},
-        {"min_segment_length", minLength},
-        {"total_length", totalLength}
+}
+
+json lineListing(std::size_t lineCount, const LineSummary& summary){
+    return {
+        {"dislocations", static_cast<int64_t>(lineCount)},
+        {"total_points", static_cast<int64_t>(summary.totalPoints)},
+        {"average_segment_length", summary.meanLength},
+        {"max_segment_length", summary.maxLength},
+        {"min_segment_length", summary.minLength},
+        {"total_length", summary.totalLength}
     };
+}
 
-    json subListings;
-    const double cellVolume = simulationCell ? simulationCell->volume3D() : 0.0;
-    if(options.exportDislocationNetworkStats)
-        subListings["network_statistics"] = getNetworkStatistics(*network, cellVolume);
-    if(options.exportCircuitInformation)
-        subListings["circuit_information"] = getCircuitInformation(*network);
-    if(options.exportJunctions)
-        subListings["junction_information"] = getJunctionInformation(*network);
-
-    json burgersFamilies = json::array();
-    for(const auto& [familyName, tally] : familySummary){
-        burgersFamilies.push_back({
+json burgersFamilyRows(const LineSummary& summary){
+    json rows = json::array();
+    for(const auto& [familyName, tally] : summary.byFamily){
+        rows.push_back({
             {"burgers_family", familyName},
             {"burgers_family_label", tally.label},
             {"segment_count", static_cast<int64_t>(tally.segmentCount)},
             {"total_length", tally.totalLength},
-            {"length_fraction", totalLength > 0 ? tally.totalLength / totalLength : 0.0}
+            {"length_fraction", summary.totalLength > 0 ? tally.totalLength / summary.totalLength : 0.0}
         });
     }
-    subListings["burgers_families"] = std::move(burgersFamilies);
+    return rows;
+}
 
-    if(structureAnalysis){
-        const auto& structureContext = structureAnalysis->context();
-        const std::size_t atomCount = structureContext.atomCount();
-        std::map<int, std::int64_t> structureCounts;
-        for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
-            structureCounts[structureTypeOf(structureContext, atomIndex)]++;
-        }
-
-        const double atomsForFraction = atomCount > 0 ? static_cast<double>(atomCount) : 1.0;
-        json structureRows = json::array();
-        for(const auto& [structureType, count] : structureCounts){
-            structureRows.push_back({
-                {"structure_id", structureType},
-                {"structure_name", structureTypeName(structureType)},
-                {"count", count},
-                {"fraction", static_cast<double>(count) / atomsForFraction}
-            });
-        }
-        subListings["structure_counts"] = std::move(structureRows);
+json structureCountRows(const StructureContext& context){
+    const std::size_t atomCount = context.atomCount();
+    std::map<int, std::int64_t> structureCounts;
+    for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
+        structureCounts[structureTypeOf(context, atomIndex)]++;
     }
 
-    doc["sub_listings"] = std::move(subListings);
+    const double atomsForFraction = atomCount > 0 ? static_cast<double>(atomCount) : 1.0;
+    json rows = json::array();
+    for(const auto& [structureType, count] : structureCounts){
+        rows.push_back({
+            {"structure_id", structureType},
+            {"structure_name", structureTypeName(structureType)},
+            {"count", count},
+            {"fraction", static_cast<double>(count) / atomsForFraction}
+        });
+    }
+    return rows;
+}
 
+json networkListings(
+    const DislocationNetwork& network,
+    double cellVolume,
+    const DislocationsExportOptions& options,
+    const LineSummary& summary,
+    const StructureContext& structureContext
+){
+    json listings;
+    if(options.exportDislocationNetworkStats)
+        listings["network_statistics"] = getNetworkStatistics(network, cellVolume);
+    if(options.exportCircuitInformation)
+        listings["circuit_information"] = getCircuitInformation(network);
+    if(options.exportJunctions)
+        listings["junction_information"] = getJunctionInformation(network);
+    listings["burgers_families"] = burgersFamilyRows(summary);
+    listings["structure_counts"] = structureCountRows(structureContext);
+    return listings;
+}
+
+}
+
+void streamDislocationsToFile(
+    const std::string& linesFilePath,
+    const std::string& summaryFilePath,
+    const DislocationNetwork& network,
+    const SimulationCell& simulationCell,
+    const DislocationsExportOptions& options,
+    const StructureAnalysis& structureAnalysis
+){
+    const std::vector<const DislocationSegment*> segments = nonDegenerateSegments(network);
+    const std::vector<DislocationLine> lines = collectLines(segments, simulationCell, options.clipPbcSegments);
+    const LineSummary summary = summarizeLines(lines);
+    logLineSummary(network.segments().size() - segments.size(), lines.size(), summary, options.clipPbcSegments);
+    writeLinesTable(linesFilePath, lines);
+
+    json doc;
+    doc["export"]["ChartExporter"] = burgersVectorChart(summary);
+    doc["main_listing"] = lineListing(lines.size(), summary);
+    doc["sub_listings"] = networkListings(
+        network, simulationCell.volume3D(), options, summary, structureAnalysis.context()
+    );
     JsonUtils::writeJsonToParquet(doc, summaryFilePath);
 }
 

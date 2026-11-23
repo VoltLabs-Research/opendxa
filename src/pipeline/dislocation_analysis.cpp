@@ -347,10 +347,10 @@ void writeOutputs(const std::string& outputBase, const DislocationOutputs& outpu
         DxaSerialization::streamDislocationsToFile(
             outputBase + "_dislocations.parquet",
             outputBase + "_dislocation_summary.parquet",
-            &results.network,
-            &results.frame.simulationCell,
+            results.network,
+            results.frame.simulationCell,
             outputs.dislocationOptions,
-            &results.structure
+            results.structure
         );
     }
     steps.next();
