@@ -5,9 +5,7 @@
 #include <volt/helpers/dislocation_network.h>
 #include <volt/pipeline/defect_cell_index.h>
 #include <volt/pipeline/interface_mesh.h>
-#include <tbb/spin_mutex.h>
 #include <string_view>
-#include <atomic>
 #include <optional>
 
 namespace Volt{
@@ -25,7 +23,7 @@ public:
 	using SearchNode = BurgersLoopSearchNode;
 
 	struct CoreCellClaim{
-		std::atomic<DislocationNode*> node{nullptr};
+		DislocationNode* node = nullptr;
 		bool claimedWhileCapStored = false;
 	};
 
@@ -105,7 +103,6 @@ private:
 
 	InterfaceMesh& _mesh;
 	DislocationNetwork _network;
-	tbb::spin_mutex _circuit_pool_mutex;
 
 	int _maxBurgersCircuitSize;
 	int _maxExtendedBurgersCircuitSize;
@@ -113,7 +110,7 @@ private:
 	MemoryPool<BurgersCircuit> _circuitPool;
 	std::vector<DislocationNode*> _danglingNodes;
 	BurgersCircuit* _unusedCircuit;
-	mutable std::atomic<size_t> _edgeStartIndex{0};
+	size_t _edgeStartIndex = 0;
 
 	bool _markCoreAtoms = false;
 	std::optional<DefectCellIndex> _defectCells;

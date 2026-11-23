@@ -13,22 +13,13 @@
 #include <array>
 #include <atomic>
 #include <algorithm>
+#include <utility>
 
 namespace Volt{
 
 BurgersCircuit* BurgersLoopBuilder::allocateCircuit(){
-    BurgersCircuit* circuit = nullptr;
-    tbb::spin_mutex::scoped_lock lock(_circuit_pool_mutex);
-    
-    if(_unusedCircuit != nullptr){
-        circuit = _unusedCircuit;
-        _unusedCircuit = nullptr;
-    }
-    
-    if(circuit == nullptr){
-        return _circuitPool.construct();
-    }
-    return circuit;
+    if(auto* circuit = std::exchange(_unusedCircuit, nullptr)) return circuit;
+    return _circuitPool.construct();
 }
 
 void BurgersLoopBuilder::traceDislocationSegments(){
@@ -72,7 +63,6 @@ void BurgersLoopBuilder::traceDislocationSegments(){
 }
 
 void BurgersLoopBuilder::discardCircuit(BurgersCircuit* circuit){
-    tbb::spin_mutex::scoped_lock lock(_circuit_pool_mutex);
     assert(_unusedCircuit == nullptr);
     _unusedCircuit = circuit;
 }
@@ -545,7 +535,7 @@ void BurgersLoopBuilder::traceSegment(DislocationSegment& segment, DislocationNo
     assert(circuit.isDangling);
 
     for(;;){
-        size_t idx = _edgeStartIndex.fetch_add(1, std::memory_order_relaxed);
+        size_t idx = _edgeStartIndex++;
         int edgeIndex = (idx % circuit.edgeCount);
 
         InterfaceMesh::Edge* firstEdge = circuit.getEdge(edgeIndex);
@@ -599,7 +589,7 @@ void BurgersLoopBuilder::traceSegment(DislocationSegment& segment, DislocationNo
 
         bool wasExtended = false;
 
-        idx = _edgeStartIndex.fetch_add(1, std::memory_order_relaxed);
+        idx = _edgeStartIndex++;
         edgeIndex = (idx % circuit.edgeCount);
 
         firstEdge = circuit.getEdge(edgeIndex);
@@ -903,7 +893,7 @@ void BurgersLoopBuilder::markCoreCells(DislocationNode& node, const Point3& cent
 		if(slot < 0 || static_cast<std::size_t>(slot) >= _coreCellClaims.size()) continue;
 
 		CoreCellClaim& claim = _coreCellClaims[slot];
-		if(claim.node.load(std::memory_order_relaxed) != nullptr) continue;
+		if(claim.node != nullptr) continue;
 
 		std::array<Point3, 4> tetrahedron;
 		for(int corner = 0; corner < 4; ++corner){
@@ -924,10 +914,8 @@ void BurgersLoopBuilder::markCoreCells(DislocationNode& node, const Point3& cent
 
 		if(!intersects) continue;
 
-		DislocationNode* unclaimed = nullptr;
-		if(claim.node.compare_exchange_strong(unclaimed, &node)){
-			claim.claimedWhileCapStored = capStored;
-		}
+		claim.node = &node;
+		claim.claimedWhileCapStored = capStored;
 	}
 }
 
@@ -942,7 +930,7 @@ std::vector<int> BurgersLoopBuilder::coreAtomDislocationIds(std::size_t particle
 		if(slot < 0 || static_cast<std::size_t>(slot) >= _coreCellClaims.size()) continue;
 
 		const CoreCellClaim& claim = _coreCellClaims[slot];
-		DislocationNode* node = claim.node.load(std::memory_order_relaxed);
+		DislocationNode* node = claim.node;
 		if(node == nullptr) continue;
 		if(node->isDangling() && claim.claimedWhileCapStored) continue;
 

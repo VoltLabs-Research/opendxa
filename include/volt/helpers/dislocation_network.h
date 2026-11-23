@@ -5,7 +5,6 @@
 #include <volt/pipeline/interface_mesh.h>
 #include <volt/helpers/burgers_circuit.h>
 #include <volt/helpers/cluster_vector.h>
-#include <tbb/spin_mutex.h>
 #include <vector>
 #include <algorithm>
 #include <ranges>
@@ -171,7 +170,6 @@ private:
 	MemoryPool<DislocationNode> _nodePool;
 	std::vector<DislocationSegment*> _segments;
 	MemoryPool<DislocationSegment> _segmentPool;
-	tbb::spin_mutex _segmentsMutex;
 };
 
 }

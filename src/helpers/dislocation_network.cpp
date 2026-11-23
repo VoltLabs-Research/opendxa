@@ -7,7 +7,6 @@
 namespace Volt{
 
 DislocationSegment* DislocationNetwork::createSegment(const ClusterVector& burgersVector){
-	tbb::spin_mutex::scoped_lock lock(_segmentsMutex);
 	DislocationNode *forwardNode = _nodePool.construct();
 	DislocationNode *backwardNode = _nodePool.construct();
 
