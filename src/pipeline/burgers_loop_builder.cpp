@@ -166,8 +166,7 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
 
             bool allEdgesOwned = true;
             for(auto* e = startVert->edges(); e != nullptr; e = e->nextVertexEdge()){
-                if(!e->nextCircuitEdge && !e->face()->circuit &&
-                   !e->_claimedForCircuit.load(std::memory_order_relaxed)){
+                if(!e->nextCircuitEdge && !e->face()->circuit){
                     allEdgesOwned = false;
                     break;
                 }
@@ -193,7 +192,6 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
 
                 for(auto* edge = cur->node->edges(); edge != nullptr && !found; edge = edge->nextVertexEdge()){
                     if(edge->nextCircuitEdge || edge->face()->circuit) continue;
-                    if(edge->_claimedForCircuit.load(std::memory_order_relaxed)) continue;
 
                     auto* nbVert = edge->vertex2();
                     Point3 nbCoord = cur->coord + cur->tm * edge->clusterVector;
@@ -244,8 +242,7 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
     for(auto& cand : candidates){
         auto* startVert = cand.edge->vertex1();
 
-        if(cand.edge->circuit != nullptr || cand.edge->_claimedForCircuit.load(std::memory_order_relaxed))
-            continue;
+        if(cand.edge->circuit != nullptr) continue;
 
         queue.clear();
 
@@ -694,7 +691,6 @@ bool BurgersLoopBuilder::tryRemoveOneCircuitEdge(
 	assert(shortEdge->vertex2() == edge2->vertex2());
 
 	if(shortEdge->circuit != nullptr) return false;
-	if(!shortEdge->tryClaimForCircuit()) return false;
 
 	assert(shortEdge->nextCircuitEdge == nullptr);
 	shortEdge->nextCircuitEdge = edge2->nextCircuitEdge;
@@ -748,14 +744,6 @@ bool BurgersLoopBuilder::trySweepTwoFacets(
 	if(innerEdge1 != innerEdge2->oppositeEdge() || outerEdge1->circuit != nullptr || outerEdge2->circuit != nullptr)
 		return false;
 
-	if(!outerEdge1->tryClaimForCircuit()){
-		return false;
-	}
-	if(!outerEdge2->tryClaimForCircuit()){
-		outerEdge1->releaseCircuitClaim();
-		return false;
-	}
-
 	assert(outerEdge1->nextCircuitEdge == nullptr);
 	assert(outerEdge2->nextCircuitEdge == nullptr);
 	outerEdge1->nextCircuitEdge = outerEdge2;
@@ -803,12 +791,6 @@ bool BurgersLoopBuilder::tryInsertOneCircuitEdge(
 
 	InterfaceMesh::Edge* insertEdge2 = edge1->nextFaceEdge()->oppositeEdge();
 	if(insertEdge2->circuit != nullptr) return false;
-
-	if(!insertEdge1->tryClaimForCircuit()) return false;
-	if(!insertEdge2->tryClaimForCircuit()){
-		insertEdge1->releaseCircuitClaim();
-		return false;
-	}
 
 	assert(insertEdge1->nextCircuitEdge == nullptr);
 	assert(insertEdge2->nextCircuitEdge == nullptr);

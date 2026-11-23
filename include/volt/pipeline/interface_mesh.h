@@ -25,17 +25,6 @@ struct InterfaceMeshEdge{
     ClusterTransition* clusterTransition = nullptr;
     BurgersCircuit* circuit = nullptr;
     HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>::Edge* nextCircuitEdge = nullptr;
-    
-    std::atomic<bool> _claimedForCircuit{false};
-    
-    bool tryClaimForCircuit(){
-        bool expected = false;
-        return _claimedForCircuit.compare_exchange_strong(expected, true);
-    }
-    
-    void releaseCircuitClaim(){
-        _claimedForCircuit.store(false);
-    }
 };
 
 using InterfaceMeshTopology = HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>;
