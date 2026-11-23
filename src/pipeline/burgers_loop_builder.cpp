@@ -136,183 +136,137 @@ void BurgersLoopBuilder::finishDislocationSegments(std::string_view referenceTop
 	});
 }
 
-struct BurgersCircuitSearchStruct{
-    InterfaceMesh::Vertex* node;
-    Point3 latticeCoord;
-    Matrix3 tm;
-    int recursiveDepth;
-    InterfaceMesh::Edge* predecessorEdge;
-    BurgersCircuitSearchStruct* nextToProcess;
+namespace{
+
+using SearchNode = BurgersLoopSearchNode;
+
+// The search walks only edges that no circuit runs along and whose facet no circuit has swept.
+bool isFreeEdge(const InterfaceMesh::Edge* edge){
+    return !edge->nextCircuitEdge && !edge->face()->circuit;
+}
+
+bool hasFreeEdge(const InterfaceMesh::Vertex* vertex){
+    for(auto* edge = vertex->edges(); edge != nullptr; edge = edge->nextVertexEdge()){
+        if(isFreeEdge(edge)) return true;
+    }
+    return false;
+}
+
+SearchNode* makeRoot(MemoryPool<SearchNode>& pool, InterfaceMesh::Vertex* vertex){
+    auto* root = pool.construct();
+    root->vertex = vertex;
+    root->coord = Point3::Origin();
+    root->tm.setIdentity();
+    root->depth = 0;
+    root->viaEdge = nullptr;
+    root->parent = nullptr;
+    return root;
+}
+
+SearchNode* makeChild(MemoryPool<SearchNode>& pool, SearchNode* parent, InterfaceMesh::Edge* edge, const Point3& coord){
+    auto* child = pool.construct();
+    child->vertex = edge->vertex2();
+    child->coord = coord;
+    child->tm = edge->clusterTransition->isSelfTransition()
+        ? parent->tm
+        : parent->tm * edge->clusterTransition->reverse->tm;
+    child->depth = parent->depth + 1;
+    child->viaEdge = edge;
+    child->parent = parent;
+    return child;
+}
+
+// Arriving at a vertex the search already reached closes a circuit. It encloses a dislocation when the two paths to
+// the vertex agree on the lattice orientation but not on the lattice coordinate.
+bool closesNonZeroCircuit(const SearchNode* from, const InterfaceMesh::Edge* edge, const Point3& coord, const SearchNode* reached){
+    const Vector3 b = reached->coord - coord;
+    if(b.isZero(CA_LATTICE_VECTOR_EPSILON)) return false;
+    const Matrix3 R = from->tm * edge->clusterTransition->reverse->tm;
+    return R.equals(reached->tm, CA_TRANSITION_MATRIX_EPSILON);
+}
+
+// Breadth-first search over free edges, at most maxDepth edges away from its start vertex.
+class CircuitSearch{
+public:
+    // Calls onClosure(edge, from, reached) for each edge that closes a circuit with a non-zero Burgers vector, and
+    // stops when it returns true.
+    template<typename OnClosure>
+    void run(InterfaceMesh::Vertex* start, int maxDepth, OnClosure&& onClosure){
+        _queue.clear();
+        _reached.clear();
+        _pool.clear(true);
+        enqueue(makeRoot(_pool, start));
+
+        for(size_t i = 0; i < _queue.size(); ++i){
+            SearchNode* from = _queue[i];
+            for(auto* edge = from->vertex->edges(); edge != nullptr; edge = edge->nextVertexEdge()){
+                if(!isFreeEdge(edge)) continue;
+
+                const Point3 coord = from->coord + from->tm * edge->clusterVector;
+                if(const auto it = _reached.find(edge->vertex2()); it != _reached.end()){
+                    if(closesNonZeroCircuit(from, edge, coord, it->second) && onClosure(edge, from, it->second)) return;
+                }else if(from->depth < maxDepth){
+                    enqueue(makeChild(_pool, from, edge, coord));
+                }
+            }
+        }
+    }
+
+private:
+    void enqueue(SearchNode* node){
+        _queue.push_back(node);
+        _reached[node->vertex] = node;
+    }
+
+    MemoryPool<SearchNode> _pool;
+    std::vector<SearchNode*> _queue;
+    std::unordered_map<InterfaceMesh::Vertex*, SearchNode*> _reached;
 };
 
-using SearchNode = BurgersLoopBuilder::SearchNode;
+// The first closing edge found from each vertex, sorted so that the serial pass creates circuits in a fixed order
+// rather than in the order the threads found them: each circuit it creates changes which edges are free.
+std::vector<InterfaceMesh::Edge*> findClosingEdges(const std::vector<InterfaceMesh::Vertex*>& vertices, int searchDepth){
+    std::vector<InterfaceMesh::Edge*> closingEdges;
+    tbb::spin_mutex closingEdgesMutex;
+
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, vertices.size(), 16), [&](const tbb::blocked_range<size_t>& range){
+        CircuitSearch search;
+        for(size_t i = range.begin(); i < range.end(); ++i){
+            if(!hasFreeEdge(vertices[i])) continue;
+            search.run(vertices[i], searchDepth, [&](InterfaceMesh::Edge* edge, SearchNode*, SearchNode*){
+                tbb::spin_mutex::scoped_lock lock(closingEdgesMutex);
+                closingEdges.push_back(edge);
+                return true;
+            });
+        }
+    });
+
+    std::sort(closingEdges.begin(), closingEdges.end(), [](const InterfaceMesh::Edge* a, const InterfaceMesh::Edge* b){
+        const int a1 = a->vertex1()->index();
+        const int b1 = b->vertex1()->index();
+        if(a1 != b1) return a1 < b1;
+        return a->vertex2()->index() < b->vertex2()->index();
+    });
+    return closingEdges;
+}
+
+}
 
 void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
     const int searchDepth = (maxBurgersCircuitSize - 1) / 2;
     assert(searchDepth >= 1);
 
-    auto& verts = mesh().vertices();
-
-    struct Candidate{
-        InterfaceMesh::Edge* edge;
-    };
-    std::vector<Candidate> candidates;
-    tbb::spin_mutex candidatesMutex;
-
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, verts.size(), 16),
-        [&](const tbb::blocked_range<size_t>& range){
-
-        MemoryPool<SearchNode> localPool;
-        std::vector<SearchNode*> queue;
-        queue.reserve(512);
-        std::unordered_map<InterfaceMesh::Vertex*, SearchNode*> visited;
-        visited.reserve(256);
-
-        for(size_t vi = range.begin(); vi < range.end(); ++vi){
-            auto* startVert = verts[vi];
-
-            if(startVert->edges() == nullptr) continue;
-
-            bool allEdgesOwned = true;
-            for(auto* e = startVert->edges(); e != nullptr; e = e->nextVertexEdge()){
-                if(!e->nextCircuitEdge && !e->face()->circuit){
-                    allEdgesOwned = false;
-                    break;
-                }
-            }
-            if(allEdgesOwned) continue;
-
-            queue.clear();
-            visited.clear();
-
-            auto* root = localPool.construct();
-            root->node = startVert;
-            root->coord = Point3::Origin();
-            root->tm.setIdentity();
-            root->depth = 0;
-            root->viaEdge = nullptr;
-            queue.push_back(root);
-            visited[startVert] = root;
-
-            bool found = false;
-
-            for(size_t qi = 0; qi < queue.size() && !found; ++qi){
-                auto* cur = queue[qi];
-
-                for(auto* edge = cur->node->edges(); edge != nullptr && !found; edge = edge->nextVertexEdge()){
-                    if(edge->nextCircuitEdge || edge->face()->circuit) continue;
-
-                    auto* nbVert = edge->vertex2();
-                    Point3 nbCoord = cur->coord + cur->tm * edge->clusterVector;
-
-                    auto it = visited.find(nbVert);
-                    if(it != visited.end()){
-                        auto* prevNode = it->second;
-                        Vector3 b = prevNode->coord - nbCoord;
-                        if(!b.isZero(CA_LATTICE_VECTOR_EPSILON)){
-                            Matrix3 R = cur->tm * edge->clusterTransition->reverse->tm;
-                            if(R.equals(prevNode->tm, CA_TRANSITION_MATRIX_EPSILON)){
-                                tbb::spin_mutex::scoped_lock lock(candidatesMutex);
-                                candidates.push_back({edge});
-                                found = true;
-                            }
-                        }
-                    }else if(cur->depth < searchDepth){
-                        auto* nb = localPool.construct();
-                        nb->node = nbVert;
-                        nb->coord = nbCoord;
-                        nb->depth = cur->depth + 1;
-                        nb->viaEdge = edge;
-                        nb->tm = edge->clusterTransition->isSelfTransition()
-                            ? cur->tm
-                            : cur->tm * edge->clusterTransition->reverse->tm;
-                        queue.push_back(nb);
-                        visited[nbVert] = nb;
-                    }
-                }
-            }
-
-            localPool.clear(true);
-        }
-    });
-
-    std::sort(candidates.begin(), candidates.end(),
-        [](const Candidate& a, const Candidate& b){
-            const int a1 = a.edge->vertex1()->index();
-            const int b1 = b.edge->vertex1()->index();
-            if(a1 != b1) return a1 < b1;
-            return a.edge->vertex2()->index() < b.edge->vertex2()->index();
+    CircuitSearch search;
+    for(InterfaceMesh::Edge* closingEdge : findClosingEdges(mesh().vertices(), searchDepth)){
+        if(closingEdge->circuit != nullptr) continue;
+        search.run(closingEdge->vertex1(), searchDepth, [&](InterfaceMesh::Edge* edge, SearchNode* from, SearchNode* reached){
+            return createBurgersCircuitOriginal(edge, from, reached, maxBurgersCircuitSize);
         });
-
-    MemoryPool<SearchNode> pool;
-    std::vector<SearchNode*> queue;
-    queue.reserve(1024);
-
-    for(auto& cand : candidates){
-        auto* startVert = cand.edge->vertex1();
-
-        if(cand.edge->circuit != nullptr) continue;
-
-        queue.clear();
-
-        auto* root = pool.construct();
-        root->node = startVert;
-        root->coord = Point3::Origin();
-        root->tm.setIdentity();
-        root->depth = 0;
-        root->viaEdge = nullptr;
-        startVert->burgersSearchStruct.store(reinterpret_cast<BurgersCircuitSearchStruct*>(root), std::memory_order_relaxed);
-        queue.push_back(root);
-
-        bool found = false;
-        for(size_t qi = 0; qi < queue.size() && !found; ++qi){
-            auto* cur = queue[qi];
-
-            for(auto* edge = cur->node->edges(); edge != nullptr && !found; edge = edge->nextVertexEdge()){
-                if(edge->nextCircuitEdge || edge->face()->circuit) continue;
-
-                auto* nbVert = edge->vertex2();
-                Point3 nbCoord = cur->coord + cur->tm * edge->clusterVector;
-
-                auto* prevStruct = nbVert->burgersSearchStruct.load(std::memory_order_relaxed);
-                if(prevStruct){
-                    auto* prev = reinterpret_cast<SearchNode*>(prevStruct);
-                    Vector3 b = prev->coord - nbCoord;
-                    if(!b.isZero(CA_LATTICE_VECTOR_EPSILON)){
-                        Matrix3 R = cur->tm * edge->clusterTransition->reverse->tm;
-                        if(R.equals(prev->tm, CA_TRANSITION_MATRIX_EPSILON)){
-                            found = createBurgersCircuitOriginal(edge, maxBurgersCircuitSize);
-                        }
-                    }
-                }else if(cur->depth < searchDepth){
-                    auto* nb = pool.construct();
-                    nb->node = nbVert;
-                    nb->coord = nbCoord;
-                    nb->depth = cur->depth + 1;
-                    nb->viaEdge = edge;
-                    nb->tm = edge->clusterTransition->isSelfTransition()
-                        ? cur->tm
-                        : cur->tm * edge->clusterTransition->reverse->tm;
-                    nbVert->burgersSearchStruct.store(reinterpret_cast<BurgersCircuitSearchStruct*>(nb), std::memory_order_relaxed);
-                    queue.push_back(nb);
-                }
-            }
-        }
-
-        for(auto* sn : queue){
-            sn->node->burgersSearchStruct.store(nullptr, std::memory_order_relaxed);
-        }
-        pool.clear(true);
     }
 }
 
-bool BurgersLoopBuilder::createBurgersCircuitOriginal(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize){
+bool BurgersLoopBuilder::createBurgersCircuitOriginal(InterfaceMesh::Edge* edge, SearchNode* currentStruct, SearchNode* neighborStruct, int maxBurgersCircuitSize){
 	if(edge->circuit != nullptr) return false;
-
-	InterfaceMesh::Vertex* currentNode = edge->vertex1();
-	InterfaceMesh::Vertex* neighborNode = edge->vertex2();
-	auto* currentStruct = currentNode->burgersSearchStruct.load(std::memory_order_relaxed);
-	auto* neighborStruct = neighborNode->burgersSearchStruct.load(std::memory_order_relaxed);
 	assert(currentStruct != neighborStruct);
 
 	BurgersCircuit* forwardCircuit = allocateCircuit();
@@ -322,34 +276,34 @@ bool BurgersLoopBuilder::createBurgersCircuitOriginal(InterfaceMesh::Edge* edge,
 	forwardCircuit->firstEdge->circuit = forwardCircuit;
 
 	std::unordered_set<InterfaceMesh::Vertex*> firstBranchSet;
-	for(BurgersCircuitSearchStruct* a = currentStruct; ; a = a->predecessorEdge->vertex1()->burgersSearchStruct.load(std::memory_order_relaxed)){
-		firstBranchSet.insert(a->node);
-		if(a->predecessorEdge == nullptr) break;
+	for(SearchNode* a = currentStruct; ; a = a->parent){
+		firstBranchSet.insert(a->vertex);
+		if(a->viaEdge == nullptr) break;
 	}
 
-	for(BurgersCircuitSearchStruct* a = neighborStruct; ; a = a->predecessorEdge->vertex1()->burgersSearchStruct.load(std::memory_order_relaxed)){
-		if(firstBranchSet.count(a->node)) break;
-		assert(a->predecessorEdge != nullptr);
-		assert(a->predecessorEdge->circuit == nullptr);
-		a->predecessorEdge->nextCircuitEdge = forwardCircuit->firstEdge;
-		forwardCircuit->firstEdge = a->predecessorEdge;
+	for(SearchNode* a = neighborStruct; ; a = a->parent){
+		if(firstBranchSet.count(a->vertex)) break;
+		assert(a->viaEdge != nullptr);
+		assert(a->viaEdge->circuit == nullptr);
+		a->viaEdge->nextCircuitEdge = forwardCircuit->firstEdge;
+		forwardCircuit->firstEdge = a->viaEdge;
 		forwardCircuit->edgeCount++;
 		forwardCircuit->firstEdge->circuit = forwardCircuit;
 	}
 
 	InterfaceMesh::Vertex* meetNode = nullptr;
-	for(BurgersCircuitSearchStruct* a = neighborStruct; ; a = a->predecessorEdge->vertex1()->burgersSearchStruct.load(std::memory_order_relaxed)){
-		if(firstBranchSet.count(a->node)){
-			meetNode = a->node;
+	for(SearchNode* a = neighborStruct; ; a = a->parent){
+		if(firstBranchSet.count(a->vertex)){
+			meetNode = a->vertex;
 			break;
 		}
-		if(a->predecessorEdge == nullptr) break;
+		if(a->viaEdge == nullptr) break;
 	}
 
-	for(BurgersCircuitSearchStruct* a = currentStruct; a->node != meetNode; a = a->predecessorEdge->vertex1()->burgersSearchStruct.load(std::memory_order_relaxed)){
-		assert(a->predecessorEdge != nullptr);
-		assert(a->predecessorEdge->oppositeEdge()->circuit == nullptr);
-		forwardCircuit->lastEdge->nextCircuitEdge = a->predecessorEdge->oppositeEdge();
+	for(SearchNode* a = currentStruct; a->vertex != meetNode; a = a->parent){
+		assert(a->viaEdge != nullptr);
+		assert(a->viaEdge->oppositeEdge()->circuit == nullptr);
+		forwardCircuit->lastEdge->nextCircuitEdge = a->viaEdge->oppositeEdge();
 		forwardCircuit->lastEdge = forwardCircuit->lastEdge->nextCircuitEdge;
 		forwardCircuit->edgeCount++;
 		forwardCircuit->lastEdge->circuit = forwardCircuit;

@@ -8,12 +8,9 @@
 namespace Volt{
 
 struct BurgersCircuit;
-struct BurgersCircuitSearchStruct;
 class BurgersLoopBuilder;
 
-struct InterfaceMeshVertex{
-    std::atomic<BurgersCircuitSearchStruct*> burgersSearchStruct{nullptr};
-};
+struct InterfaceMeshVertex{};
 
 struct InterfaceMeshFace{
     // Set on a facet a circuit swept before storing its cap. generateDefectMesh drops these, and keeps the facets a

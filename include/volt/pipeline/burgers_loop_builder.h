@@ -10,12 +10,15 @@
 
 namespace Volt{
 
+// A vertex the breadth-first search for Burgers circuits reached, with the lattice coordinate and the frame rotation
+// accumulated along the path from the search's start vertex.
 struct BurgersLoopSearchNode{
-	HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>::Vertex* node;
+	InterfaceMesh::Vertex* vertex;
 	Point3 coord;
 	Matrix3 tm;
 	int depth;
-	HalfEdgeMesh<InterfaceMeshEdge, InterfaceMeshFace, InterfaceMeshVertex>::Edge* viaEdge;
+	InterfaceMesh::Edge* viaEdge;
+	BurgersLoopSearchNode* parent;
 };
 
 class BurgersLoopBuilder{
@@ -83,7 +86,7 @@ private:
 	void createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength);
 
 	void findPrimarySegments(int maxBurgersCircuitSize);
-	bool createBurgersCircuitOriginal(InterfaceMesh::Edge* edge, int maxBurgersCircuitSize);
+	bool createBurgersCircuitOriginal(InterfaceMesh::Edge* edge, SearchNode* currentStruct, SearchNode* neighborStruct, int maxBurgersCircuitSize);
 	bool intersectsOtherCircuits(BurgersCircuit* circuit);
 	bool tryRemoveTwoCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2);
 	bool tryRemoveThreeCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2, bool markSwept);
