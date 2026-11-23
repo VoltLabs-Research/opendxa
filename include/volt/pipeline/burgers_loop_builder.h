@@ -74,6 +74,7 @@ public:
 	[[nodiscard]] std::vector<int> coreAtomDislocationIds(std::size_t particleCount) const;
 
 private:
+	void indexDefectCells();
 	BurgersCircuit* allocateCircuit();
 	BurgersCircuit* buildReverseCircuit(BurgersCircuit* forwardCircuit);
 

@@ -31,45 +31,55 @@ BurgersCircuit* BurgersLoopBuilder::allocateCircuit(){
     return _circuitPool.construct();
 }
 
+namespace{
+
+// From the trial size on, each circuit that still dangles stores its cap once: the defect mesh closes the circuit's
+// hole with it, and the line drops the points traced after it.
+void storeCaps(const std::vector<DislocationNode*>& nodes){
+    tbb::parallel_for_each(nodes.begin(), nodes.end(), [](DislocationNode* node){
+        BurgersCircuit* circuit = node->circuit;
+        if(circuit->isDangling && circuit->segmentMeshCap.empty()){
+            circuit->storeCircuit();
+            circuit->numPreliminaryPoints = 0;
+        }
+    });
+}
+
+}
+
 void BurgersLoopBuilder::traceDislocationSegments(){
     mesh().clearFaceFlag(InterfaceMeshFace::kSweptBeforeCapFlag);
-
     if(_markCoreAtoms){
-        const double alpha = DefectCellIndex::kAlphaScale
-            * _mesh.structureAnalysis().maximumNeighborDistance();
-        _defectCells.emplace(_mesh.tessellation(), alpha);
-        _coreCellClaims = std::vector<CoreCellClaim>(_defectCells->cellCount());
+        indexDefectCells();
     }
 
     // One step per circuit length, from 3 up to the stretched maximum.
     ProgressReporter progress("Tracing Burgers circuits",
         static_cast<std::uint64_t>(std::max(0, _maxExtendedCircuitSize - 2)));
     for(int maxCircuitLength : std::views::iota(3, _maxExtendedCircuitSize + 1)){
-        auto dangling = _danglingNodes;
-
-        if(!dangling.empty()){
-            for(auto* node : dangling){
-                traceSegment(*node, maxCircuitLength, maxCircuitLength <= _maxTrialCircuitSize);
-            }
+        const bool withinTrialSize = maxCircuitLength <= _maxTrialCircuitSize;
+        const std::vector<DislocationNode*> dangling = _danglingNodes;
+        for(DislocationNode* node : dangling){
+            traceSegment(*node, maxCircuitLength, withinTrialSize);
         }
 
         // An even length has the same search depth, (n - 1) / 2, as the odd length before it, so it is skipped.
-        if((maxCircuitLength & 1) && maxCircuitLength <= _maxTrialCircuitSize){
+        if((maxCircuitLength & 1) && withinTrialSize){
             findPrimarySegments(maxCircuitLength);
         }
         joinSegments(maxCircuitLength);
 
-        if(maxCircuitLength >= _maxTrialCircuitSize && !dangling.empty()){
-            tbb::parallel_for_each(dangling.begin(), dangling.end(), [&](DislocationNode* node){
-                auto* C = node->circuit;
-                if(C->isDangling && C->segmentMeshCap.empty()){
-                    C->storeCircuit();
-                    C->numPreliminaryPoints = 0;
-                }
-            });
+        if(maxCircuitLength >= _maxTrialCircuitSize){
+            storeCaps(dangling);
         }
         progress.update(static_cast<std::uint64_t>(maxCircuitLength - 2));
     }
+}
+
+void BurgersLoopBuilder::indexDefectCells(){
+    const double alpha = DefectCellIndex::kAlphaScale * _mesh.structureAnalysis().maximumNeighborDistance();
+    _defectCells.emplace(_mesh.tessellation(), alpha);
+    _coreCellClaims = std::vector<CoreCellClaim>(_defectCells->cellCount());
 }
 
 void BurgersLoopBuilder::discardCircuit(BurgersCircuit* circuit){
