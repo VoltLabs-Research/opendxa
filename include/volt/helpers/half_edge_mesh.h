@@ -22,6 +22,14 @@ public:
 
     class Edge : public EdgeBase{
     public:
+        Edge(Vertex* v2, Face* f) noexcept
+            : _oppositeEdge(nullptr)
+            , _vertex2(v2)
+            , _face(f)
+            , _nextVertexEdge(nullptr)
+            , _nextFaceEdge(nullptr)
+            , _prevFaceEdge(nullptr){}
+
         [[nodiscard]] Vertex* vertex1() const noexcept{
 			return _prevFaceEdge->_vertex2;
 		}
@@ -56,15 +64,7 @@ public:
             other->_oppositeEdge = this;
         }
 
-    public:
-        Edge(Vertex* v2, Face* f) noexcept
-            : _oppositeEdge(nullptr)
-            , _vertex2(v2)
-            , _face(f)
-            , _nextVertexEdge(nullptr)
-            , _nextFaceEdge(nullptr)
-            , _prevFaceEdge(nullptr){}
-
+    private:
         Edge* _oppositeEdge;
         Vertex* _vertex2;
         Face* _face;
@@ -73,10 +73,17 @@ public:
         Edge* _prevFaceEdge;
 
         friend class HalfEdgeMesh;
+        friend Vertex;
     };
 
     class Vertex : public VertexBase{
     public:
+        Vertex(const Point3& p, int idx = -1) noexcept
+            : _pos(p)
+            , _edges(nullptr)
+            , _numEdges(0)
+            , _index(idx){}
+
         [[nodiscard]] Edge* edges() const noexcept{
 			return _edges;
 		}
@@ -103,22 +110,16 @@ public:
             e->oppositeEdge()->_vertex2 = v;
         }
 
-    public:
-        Vertex(const Point3& p, int idx = -1) noexcept
-            : _pos(p)
-            , _edges(nullptr)
-            , _numEdges(0)
-            , _index(idx){}
-
+    private:
         void addEdge(Edge* e) noexcept{
-            tbb::spin_mutex::scoped_lock lock(mutex);
+            tbb::spin_mutex::scoped_lock lock(_mutex);
             e->_nextVertexEdge = _edges;
             _edges = e;
             ++_numEdges;
         }
 
         void removeEdge(Edge* e) noexcept{
-            tbb::spin_mutex::scoped_lock lock(mutex);
+            tbb::spin_mutex::scoped_lock lock(_mutex);
             --_numEdges;
             if(e == _edges){
                 _edges = e->nextVertexEdge();
@@ -141,7 +142,7 @@ public:
         Edge* _edges;
         size_t _numEdges;
         int _index;
-        mutable tbb::spin_mutex mutex;
+        mutable tbb::spin_mutex _mutex;
 
         friend class HalfEdgeMesh;
     };
@@ -183,11 +184,13 @@ public:
         }
 
     protected:
+        // Protected so that faces are only made by createFace(), which numbers them.
         Face(int idx = -1) noexcept
             : _edges(nullptr)
             , _index(idx)
             , _flags(0){}
 
+    private:
         Edge* _edges;
         int _index;
         mutable unsigned int _flags;
@@ -243,10 +246,36 @@ public:
 	}
 
     Vertex* createVertex(const Point3& p){
-        tbb::spin_mutex::scoped_lock lock(mutex);
+        tbb::spin_mutex::scoped_lock lock(_mutex);
         auto* v = _vertexPool.construct(p, static_cast<int>(vertexCount()));
         _vertices.push_back(v);
         return v;
+    }
+
+    Face* createFace(){
+        tbb::spin_mutex::scoped_lock lock(_mutex);
+        auto* f = _facePool.construct(static_cast<int>(faceCount()));
+        _faces.push_back(f);
+        return f;
+    }
+
+    Edge* createEdge(Vertex* v1, Vertex* v2, Face* f){
+        tbb::spin_mutex::scoped_lock lock(_mutex);
+        auto* e = _edgePool.construct(v2, f);
+        v1->addEdge(e);
+
+        if(f->_edges){
+            e->_nextFaceEdge = f->_edges;
+            e->_prevFaceEdge = f->_edges->_prevFaceEdge;
+            f->_edges->_prevFaceEdge->_nextFaceEdge = e;
+            f->_edges->_prevFaceEdge = e;
+        }else{
+            e->_nextFaceEdge = e;
+            e->_prevFaceEdge = e;
+            f->_edges = e;
+        }
+
+        return e;
     }
 
     template<typename It>
@@ -289,54 +318,19 @@ public:
         return closed;
     }
 
-    Face* createFace(){
-        tbb::spin_mutex::scoped_lock lock(mutex);
-        auto* f = _facePool.construct(static_cast<int>(faceCount()));
-        _faces.push_back(f);
-        return f;
-    }
-
-    Edge* createEdge(Vertex* v1, Vertex* v2, Face* f){
-        tbb::spin_mutex::scoped_lock lock(mutex);
-        auto* e = _edgePool.construct(v2, f);
-        v1->addEdge(e);
-        
-		if(f->_edges){
-            e->_nextFaceEdge = f->_edges;
-            e->_prevFaceEdge = f->_edges->_prevFaceEdge;
-            f->_edges->_prevFaceEdge->_nextFaceEdge = e;
-            f->_edges->_prevFaceEdge = e;
-        }else{
-            e->_nextFaceEdge = e;
-            e->_prevFaceEdge = e;
-            f->_edges = e;
-        }
-
-        return e;
-    }
-
-public:
-	class InternalVertex : public Vertex{
-    public:
-        InternalVertex(const Point3& p, int idx) noexcept : Vertex(p, idx){}
-    };
-
-    class InternalEdge : public Edge{
-    public:
-        InternalEdge(Vertex* v2, Face* f) noexcept : Edge(v2, f){}
-    };
-    
-	class InternalFace : public Face{
+private:
+    // Gives the pool access to Face's protected constructor.
+    class InternalFace : public Face{
     public:
         InternalFace(int idx) noexcept : Face(idx){}
     };
 
     std::vector<Vertex*> _vertices;
-    MemoryPool<InternalVertex> _vertexPool;
-    MemoryPool<InternalEdge> _edgePool;
+    MemoryPool<Vertex> _vertexPool;
+    MemoryPool<Edge> _edgePool;
     std::vector<Face*> _faces;
     MemoryPool<InternalFace> _facePool;
-    mutable tbb::spin_mutex mutex;
+    mutable tbb::spin_mutex _mutex;
 };
 
 }
