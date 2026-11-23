@@ -27,12 +27,13 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(int atomIndex1, int ato
 
     _nodePool.clear(true);
     PathNode start{atomIndex1, ClusterVector{Vector3::Zero(), nullptr}};
-    start.distance = 0;
 
     _visitedAtoms.set(atomIndex1);
 
     PathNode* tail = &start;
     std::optional<ClusterVector> result;
+    // A node this far from atom 1 only looks for atom 2 among its neighbors: one more step would make the path too long.
+    const int lastDistance = _maxPathLength - 1;
 
     for(PathNode* cur = &start; cur && !result; cur = cur->nextToProcess){
         int a = cur->atomIndex;
@@ -48,7 +49,7 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(int atomIndex1, int ato
                 continue;
 			}
 
-            if(cur->distance >= _maxPathLength - 1 && nb != atomIndex2){
+            if(cur->distance >= lastDistance && nb != atomIndex2){
                 continue;
 			}
 
@@ -60,18 +61,11 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(int atomIndex1, int ato
                 if(nbCluster->id == 0){
                     continue;
 				}
-                bool found = false;
-                int n2 = structureAnalysis().numberOfNeighbors(nb);
-                for(int j = 0; j < n2; ++j){
-                    if(structureAnalysis().getNeighbor(nb, j) == a){
-                        step = ClusterVector{-structureAnalysis().neighborLatticeVector(nb, j), nbCluster};
-                        found = true;
-                        break;
-                    }
-                }
-                if(!found){
+                const int j = structureAnalysis().findNeighbor(nb, a);
+                if(j < 0){
                     continue;
 				}
+                step = ClusterVector{-structureAnalysis().neighborLatticeVector(nb, j), nbCluster};
             }
 
             auto pathVec = cur->idealVector;
@@ -93,7 +87,7 @@ std::optional<ClusterVector> CrystalPathFinder::findPath(int atomIndex1, int ato
                 break;
             }
 
-            if(cur->distance < _maxPathLength - 1){
+            if(cur->distance < lastDistance){
                 auto* node = _nodePool.construct(nb, pathVec);
                 node->distance = cur->distance + 1;
                 assert(!tail->nextToProcess);
