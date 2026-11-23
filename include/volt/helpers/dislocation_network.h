@@ -169,17 +169,7 @@ public:
 		return _segments;
 	}
 
-	void smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, bool isLoop);
 	void smoothDislocationLines(double lineSmoothingLevel, double linePointInterval);
-	void coarsenDislocationLine(
-		double linePointInterval,
-		const std::vector<Point3>& input,
-		const std::vector<int>& coreSize,
-		std::vector<Point3>& output,
-		std::vector<int>& outputCoreSize,
-		bool isClosedLoop,
-		bool isInfiniteLine
-	);
 
 	DislocationSegment* createSegment(const ClusterVector& burgersVector);
 	void discardSegment(DislocationSegment* segment);
