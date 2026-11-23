@@ -3,7 +3,6 @@
 #include <volt/structures/crystal_topology_registry.h>
 
 #include <algorithm>
-#include <array>
 #include <string>
 #include <vector>
 
@@ -74,45 +73,9 @@ static PluginDescriptor buildDescriptor() {
         "PatternStructureMatching or ReferenceCrystalMatching). If the name matches a known topology "
         "YAML in --lattice_dir it is canonicalized; otherwise the contract-supplied name is used "
         "as-is. [required]", ""});
-    meta.insert(meta.begin() + 2, {"--metric_rescale", "sx,sy,sz",
-        "Affine metric isotropization factors for anisotropic crystals. DXA runs in a frame with "
-        "coords/(sx,sy,sz); ideal vectors are rescaled to match, and the Burgers vector comes out in "
-        "lattice units (multiply components by sx,sy,sz for Angstrom). For reference-built contracts, "
-        "use the factors reported by the ReferenceCrystalMatching producer. Default: off (1,1,1).", ""});
     PluginDescriptor descriptor{"volt-dxa", "Full Dislocation Analysis", std::move(meta)};
     descriptor.refine = refineTopologyDomain;
     return descriptor;
-}
-
-static bool parseMetricRescale(const std::string& raw, double& rescaleX, double& rescaleY, double& rescaleZ){
-    if(raw.empty()){
-        return false;
-    }
-    std::array<double, 3> factors{1.0, 1.0, 1.0};
-    std::size_t start = 0;
-    for(int axis = 0; axis < 3; ++axis){
-        const std::size_t comma = raw.find(',', start);
-        const std::string token = raw.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-        try{
-            factors[axis] = std::stod(token);
-        }catch(...){
-            return false;
-        }
-        if(factors[axis] <= 0.0){
-            return false;
-        }
-        if(comma == std::string::npos){
-            if(axis != 2){
-                return false;
-            }
-            break;
-        }
-        start = comma + 1;
-    }
-    rescaleX = factors[0];
-    rescaleY = factors[1];
-    rescaleZ = factors[2];
-    return true;
 }
 
 VOLT_PLUGIN_MAIN(buildDescriptor(),
@@ -146,15 +109,6 @@ VOLT_PLUGIN_MAIN(buildDescriptor(),
         spdlog::info("Reference topology '{}' resolved to '{}'", referenceName, resolvedTopology);
     }
     analyzer.setReferenceTopology(resolvedTopology);
-
-    const auto metricRescaleRaw = CLI::getString(opts, "--metric_rescale", "");
-    if(!metricRescaleRaw.empty()){
-        double rescaleX = 1.0, rescaleY = 1.0, rescaleZ = 1.0;
-        if(!parseMetricRescale(metricRescaleRaw, rescaleX, rescaleY, rescaleZ)){
-            return AnalysisResult::failure("Malformed --metric_rescale (expected positive sx,sy,sz)");
-        }
-        analyzer.setMetricRescale(rescaleX, rescaleY, rescaleZ);
-    }
 
     try{
         analyzer.compute(frame, outputBase);

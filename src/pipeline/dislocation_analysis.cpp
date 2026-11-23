@@ -116,40 +116,8 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
 
     std::shared_ptr<ParticleProperty> positions = std::move(prepared.positions);
 
-    SimulationCell analysisCell = frame.simulationCell;
-    ReconstructedStructureContext context(positions.get(), analysisCell);
+    ReconstructedStructureContext context(positions.get(), frame.simulationCell);
     auto structureAnalysis = std::make_unique<StructureAnalysis>(context);
-
-    const bool metricRescaleActive =
-            std::abs(_metricRescaleX - 1.0) > 1e-12 ||
-            std::abs(_metricRescaleY - 1.0) > 1e-12 ||
-            std::abs(_metricRescaleZ - 1.0) > 1e-12;
-
-    if(metricRescaleActive){
-        spdlog::info(
-            "Metric isotropization active: analysis frame rescaled by (1/{}, 1/{}, 1/{})",
-            _metricRescaleX, _metricRescaleY, _metricRescaleZ
-        );  
-
-        Point3* pos = positions->dataPoint3();
-        const std::size_t n = positions->size();
-        for(std::size_t i = 0; i < n; i++){
-            pos[i] = Point3(
-                pos[i].x() / _metricRescaleX,
-                pos[i].y() / _metricRescaleY,
-                pos[i].z() / _metricRescaleZ
-            );
-        }
-
-        AffineTransformation cellMatrix = frame.simulationCell.matrix();
-        for(int col = 0; col < 4; col++){
-            cellMatrix(0, col) /= _metricRescaleX;
-            cellMatrix(1, col) /= _metricRescaleY;
-            cellMatrix(2, col) /= _metricRescaleZ;
-        }
-
-        analysisCell.setMatrix(cellMatrix);
-    }
 
     // The outputs this run writes, in the units of the phase weights below; skipped ones weigh nothing.
     const bool writesOutputs = !outputFile.empty();
@@ -208,24 +176,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         clusteredAtoms, context.atomCount(), percentOf(clusteredAtoms, context.atomCount())
     );
 
-    if(metricRescaleActive){
-        if(structureAnalysis->hasNeighborLatticeVectorOverrides()){
-            std::vector<Vector3> overrides = structureAnalysis->neighborLatticeVectorOverrides();
-            const std::size_t stride= structureAnalysis->neighborLatticeVectorOverrideStride();
-            for(Vector3& v : overrides){
-                v = Vector3(
-                    v.x() / _metricRescaleX,
-                    v.y() / _metricRescaleY,
-                    v.z() / _metricRescaleZ
-                );
-            }
-
-            structureAnalysis->setNeighborLatticeVectorOverrides(std::move(overrides), stride);
-
-            const double smax = std::max({_metricRescaleX, _metricRescaleY, _metricRescaleZ});
-            context.maximumNeighborDistance /= smax;
-        }
-    }
     steps.next("Building the Delaunay tessellation");
 
     DelaunayTessellation tessellation;
@@ -326,19 +276,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         );
     }
     steps.next("Smoothing dislocation lines");
-
-    if(metricRescaleActive){
-        for(DislocationSegment* segment : network.segments()){
-            if(!segment) continue;
-            for(Point3& p : segment->line){
-                p = Point3(
-                    p.x() * _metricRescaleX,
-                    p.y() * _metricRescaleY,
-                    p.z() * _metricRescaleZ
-                );
-            }
-        }
-    }
 
     network.smoothDislocationLines(_lineSmoothingLevel, _linePointInterval);
     double totalLineLength = 0.0;

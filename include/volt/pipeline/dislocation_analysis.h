@@ -107,12 +107,6 @@ public:
         _coverDomainWithFiniteTets = coverDomainWithFiniteTets;
     }
 
-    void setMetricRescale(double sa, double sb, double sc){
-        _metricRescaleX = sa;
-        _metricRescaleY = sb;
-        _metricRescaleZ = sc;
-    }
-
 private:
     std::string _referenceTopologyName;
 
@@ -123,10 +117,6 @@ private:
     double _ghostLayerScale;
     double _interfaceAlphaScale;
     int _crystalPathSteps;
-
-    double _metricRescaleX = 1.0;
-    double _metricRescaleY = 1.0;
-    double _metricRescaleZ = 1.0;
 
     bool _exportDefectMesh;
     bool _exportInterfaceMesh;
