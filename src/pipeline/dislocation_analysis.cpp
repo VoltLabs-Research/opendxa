@@ -1,35 +1,92 @@
 #include <volt/pipeline/dislocation_analysis.h>
 
+#include <volt/analysis/cluster_graph_io.h>
 #include <volt/analysis/structure_analysis.h>
+#include <volt/analysis/structure_identification_export.h>
 #include <volt/core/frame_adapter.h>
 #include <volt/core/progress.h>
 #include <volt/core/reconstructed_structure.h>
-#include <volt/analysis/cluster_graph_io.h>
+#include <volt/helpers/dxa_serialization.h>
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/pipeline/delaunay_tessellation.h>
 #include <volt/pipeline/elastic_mapping.h>
 #include <volt/pipeline/interface_mesh.h>
-#include <volt/helpers/dxa_serialization.h>
-#include <volt/analysis/structure_identification_export.h>
 #include <volt/structures/crystal_structure_types.h>
 #include <volt/utilities/parquet_atom_writer.h>
 
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
-#include <memory>
 #include <stdexcept>
 #include <string>
-#include <utility>
+#include <string_view>
 #include <vector>
-#include <chrono>
 
 namespace Volt{
 
 using namespace Volt::Particles;
 
+struct DislocationOutputs{
+    bool defectMesh = false;
+    bool dislocations = false;
+    bool interfaceMesh = false;
+    bool tessellation = false;
+    bool atoms = false;
+    bool coreAtoms = false;
+    bool coherentRegions = false;
+    DxaSerialization::DislocationsExportOptions dislocationOptions;
+};
+
 namespace{
+
+// Relative wall time of each phase on sample runs: how far each one moves the progress VOLT shows.
+namespace Cost{
+constexpr double Reconstruction = 2.0;
+constexpr double Tessellation = 4.0;
+constexpr double TessellationEdges = 1.0;
+constexpr double ClusterLabels = 0.2;
+constexpr double IdealVectors = 1.5;
+constexpr double ElasticMapping = TessellationEdges + ClusterLabels + IdealVectors;
+constexpr double InterfaceMesh = 2.5;
+constexpr double BurgersCircuits = 6.0;
+constexpr double CoreAtoms = 0.3;
+constexpr double DefectMesh = 0.6;
+constexpr double LineSmoothing = 0.1;
+
+constexpr double DefectMeshFile = 1.0;
+constexpr double DislocationsFile = 0.2;
+constexpr double InterfaceMeshFile = 1.0;
+constexpr double TessellationFile = 8.0;
+constexpr double AtomsFile = 2.0;
+constexpr double CoreAtomsFile = 0.2;
+constexpr double CoherentRegionsFile = 3.0;
+}
+
+double costIf(bool runs, double cost){
+    return runs ? cost : 0.0;
+}
+
+double outputsCost(const DislocationOutputs& outputs){
+    return costIf(outputs.defectMesh, Cost::DefectMeshFile)
+        + costIf(outputs.dislocations, Cost::DislocationsFile)
+        + costIf(outputs.interfaceMesh, Cost::InterfaceMeshFile)
+        + costIf(outputs.tessellation, Cost::TessellationFile)
+        + costIf(outputs.atoms, Cost::AtomsFile)
+        + costIf(outputs.coreAtoms, Cost::CoreAtomsFile)
+        + costIf(outputs.coherentRegions, Cost::CoherentRegionsFile);
+}
+
+long long millisecondsSince(const Stopwatch& timer){
+    return std::chrono::duration_cast<std::chrono::milliseconds>(timer.elapsedTime()).count();
+}
+
+long long lapMilliseconds(Stopwatch& timer){
+    const long long milliseconds = millisecondsSince(timer);
+    timer.restart();
+    return milliseconds;
+}
 
 struct NetworkTopology{
     std::size_t closedLoops = 0;
@@ -66,6 +123,286 @@ NetworkTopology summarizeNetworkTopology(const DislocationNetwork& network){
     return topology;
 }
 
+void reconstructStructure(
+    const LammpsParser::Frame& frame,
+    const std::string& neighborLatticePath,
+    const ClusterGraphExportPaths& clusterPaths,
+    StructureAnalysis& structure,
+    ReconstructedStructureContext& context
+){
+    const Stopwatch timer;
+    spdlog::info("Reconstructing structure from the upstream contract...");
+    std::string error;
+    if(!ReconstructedStructureLoader::load(frame, neighborLatticePath, clusterPaths, structure, context, &error)){
+        throw std::runtime_error(error);
+    }
+
+    const ClusterGraph& clusterGraph = structure.clusterGraph();
+    const auto clusterCount = std::ranges::count_if(
+        clusterGraph.clusters(),
+        [](const Cluster* cluster){ return cluster->id != 0; }
+    );
+    std::size_t clusteredAtoms = 0;
+    if(context.atomClusters){
+        const int* atomClusters = context.atomClusters->constDataInt();
+        clusteredAtoms = static_cast<std::size_t>(std::count_if(
+            atomClusters, atomClusters + context.atomClusters->size(),
+            [](int clusterId){ return clusterId != 0; }
+        ));
+    }
+    spdlog::info(
+        "[{:>6}ms] Structure reconstruction: {} clusters, {} transitions, {} of {} atoms in clusters ({:.1f}%)",
+        millisecondsSince(timer), clusterCount, clusterGraph.clusterTransitions().size(),
+        clusteredAtoms, context.atomCount(), percentOf(clusteredAtoms, context.atomCount())
+    );
+}
+
+void tessellate(
+    DelaunayTessellation& tessellation,
+    const StructureContext& context,
+    double ghostLayerSize,
+    bool coverDomainWithFiniteTets
+){
+    const Stopwatch timer;
+    spdlog::info("Building Delaunay tessellation (ghost layer {:.2f})...", ghostLayerSize);
+    tessellation.generateTessellation(
+        context.simCell,
+        context.positions->constDataPoint3(),
+        context.atomCount(),
+        ghostLayerSize,
+        coverDomainWithFiniteTets,
+        nullptr
+    );
+    spdlog::info(
+        "[{:>6}ms] Delaunay tessellation: {} primary tetrahedra",
+        millisecondsSince(timer), tessellation.numberOfPrimaryTetrahedra()
+    );
+}
+
+void mapElastically(ElasticMapping& elasticMap, int crystalPathSteps){
+    const Stopwatch total;
+    Stopwatch lap;
+    spdlog::info("Computing elastic mapping (crystal path search depth {})...", crystalPathSteps);
+    ProgressSteps steps({Cost::TessellationEdges, Cost::ClusterLabels, Cost::IdealVectors});
+
+    elasticMap.generateTessellationEdges();
+    spdlog::info("[{:>6}ms]   ... tessellation edges: {}", lapMilliseconds(lap), elasticMap.edgeCount());
+
+    steps.next("Assigning vertices to clusters");
+    elasticMap.assignVerticesToClusters();
+    spdlog::info("[{:>6}ms]   ... vertex-to-cluster labels", lapMilliseconds(lap));
+
+    steps.next("Assigning ideal vectors to edges");
+    elasticMap.assignIdealVectorsToEdges(false, crystalPathSteps);
+    spdlog::info("[{:>6}ms]   ... ideal vectors on edges", lapMilliseconds(lap));
+
+    elasticMap.shrinkVertexStorage();
+    spdlog::info("[{:>6}ms] Elastic mapping", millisecondsSince(total));
+}
+
+void buildInterfaceMesh(InterfaceMesh& interfaceMesh, double alphaScale){
+    const Stopwatch timer;
+    const double maximumNeighborDistance = interfaceMesh.structureAnalysis().maximumNeighborDistance();
+    spdlog::info("Building interface mesh (alpha {:.2f})...", alphaScale * maximumNeighborDistance);
+    interfaceMesh.createMesh(maximumNeighborDistance, alphaScale);
+    interfaceMesh.elasticMapping().releaseCaches();
+    spdlog::info(
+        "[{:>6}ms] Interface mesh: {} facets, {} vertices{}",
+        millisecondsSince(timer), interfaceMesh.faceCount(), interfaceMesh.vertexCount(),
+        interfaceMesh.isCompletelyGood() && !interfaceMesh.isCompletelyBad()
+            ? " (no elastically incompatible tetrahedra)" : ""
+    );
+    if(interfaceMesh.isCompletelyBad()){
+        spdlog::warn("No elastically compatible tetrahedra: there is no crystalline region to trace dislocations in");
+    }
+}
+
+void traceDislocations(BurgersLoopBuilder& tracer, std::string_view referenceTopology){
+    const Stopwatch timer;
+    spdlog::info(
+        "Tracing Burgers circuits (trial circuits up to {} edges, stretched up to {})...",
+        tracer.maxTrialCircuitSize(), tracer.maxExtendedCircuitSize()
+    );
+    tracer.traceDislocationSegments();
+    tracer.finishDislocationSegments(referenceTopology);
+    const NetworkTopology topology = summarizeNetworkTopology(tracer.network());
+    spdlog::info(
+        "[{:>6}ms] Burgers loop tracing: {} segments ({} closed loops, {} infinite lines), {} junctions, {} dangling ends",
+        millisecondsSince(timer), tracer.network().segments().size(), topology.closedLoops, topology.infiniteLines,
+        topology.junctions, topology.danglingEnds
+    );
+}
+
+std::vector<int> markCoreAtoms(const BurgersLoopBuilder& tracer, std::size_t atomCount){
+    const Stopwatch timer;
+    std::vector<int> dislocationIds = tracer.coreAtomDislocationIds(atomCount);
+    const auto markedAtoms = std::ranges::count_if(dislocationIds, [](int id){ return id >= 0; });
+    spdlog::info("[{:>6}ms] Core atom marking ({} atoms marked)", millisecondsSince(timer), markedAtoms);
+    return dislocationIds;
+}
+
+void buildDefectMesh(const InterfaceMesh& interfaceMesh, const BurgersLoopBuilder& tracer, InterfaceMeshTopology& defectMesh){
+    const Stopwatch timer;
+    const bool watertight = interfaceMesh.generateDefectMesh(tracer, defectMesh);
+    if(!watertight){
+        spdlog::warn("Defect mesh is not watertight: at least one dislocation hole was left uncapped");
+    }
+    spdlog::info(
+        "[{:>6}ms] Defect mesh ({} of {} interface facets kept, {} vertices{})",
+        millisecondsSince(timer), defectMesh.faceCount(), interfaceMesh.faceCount(), defectMesh.vertexCount(),
+        watertight ? ", watertight" : ""
+    );
+}
+
+void smoothLines(DislocationNetwork& network, double smoothingLevel, double pointInterval, double cellVolume){
+    const Stopwatch timer;
+    network.smoothDislocationLines(smoothingLevel, pointInterval);
+    double totalLineLength = 0.0;
+    for(const DislocationSegment* segment : network.segments()){
+        if(segment) totalLineLength += segment->calculateLength();
+    }
+    spdlog::info(
+        "[{:>6}ms] Line smoothing: total line length {:.2f}, dislocation density {:.3e}",
+        millisecondsSince(timer), totalLineLength, cellVolume > 0.0 ? totalLineLength / cellVolume : 0.0
+    );
+}
+
+void writeCoreAtoms(
+    const std::string& filePath,
+    const LammpsParser::Frame& frame,
+    const StructureAnalysis& structure,
+    const std::vector<int>& dislocationIds
+){
+    std::vector<std::size_t> coreAtoms;
+    for(std::size_t i = 0; i < dislocationIds.size(); ++i){
+        if(dislocationIds[i] >= 0) coreAtoms.push_back(i);
+    }
+
+    LammpsParser::Frame coreFrame;
+    coreFrame.timestep = frame.timestep;
+    coreFrame.natoms = static_cast<int>(coreAtoms.size());
+    coreFrame.simulationCell = frame.simulationCell;
+    coreFrame.positions.reserve(coreAtoms.size());
+    coreFrame.ids.reserve(coreAtoms.size());
+    for(const std::size_t source : coreAtoms){
+        coreFrame.positions.push_back(source < frame.positions.size()
+            ? frame.positions[source] : Point3::Origin());
+        coreFrame.ids.push_back(source < frame.ids.size()
+            ? frame.ids[source] : static_cast<int>(source));
+    }
+
+    const StructureContext& context = structure.context();
+    const int* structureTypes = context.structureTypes ? context.structureTypes->constDataInt() : nullptr;
+
+    spdlog::info("Writing core atom data ({} atoms)", coreAtoms.size());
+    streamAtomsToParquet(
+        filePath,
+        coreFrame,
+        [&coreAtoms, structureTypes](std::size_t atomIndex){
+            return std::string(structureTypeName(
+                structureTypes
+                    ? structureTypes[coreAtoms[atomIndex]]
+                    : static_cast<int>(StructureType::OTHER)
+            ));
+        },
+        [&coreAtoms, &dislocationIds](ColumnarAtomWriter& writer, std::size_t atomIndex){
+            writer.field("dislocation_id", dislocationIds[coreAtoms[atomIndex]]);
+        }
+    );
+}
+
+struct AnalysisResults{
+    const LammpsParser::Frame& frame;
+    const StructureAnalysis& structure;
+    const DelaunayTessellation& tessellation;
+    const InterfaceMesh& interfaceMesh;
+    InterfaceMeshTopology& defectMesh;
+    const DislocationNetwork& network;
+    const std::vector<int>& coreAtomDislocationIds;
+};
+
+void writeOutputs(const std::string& outputBase, const DislocationOutputs& outputs, const AnalysisResults& results){
+    const Stopwatch timer;
+    ProgressSteps steps({
+        costIf(outputs.defectMesh, Cost::DefectMeshFile),
+        costIf(outputs.dislocations, Cost::DislocationsFile),
+        costIf(outputs.interfaceMesh, Cost::InterfaceMeshFile),
+        costIf(outputs.tessellation, Cost::TessellationFile),
+        costIf(outputs.atoms, Cost::AtomsFile),
+        costIf(outputs.coreAtoms, Cost::CoreAtomsFile),
+        costIf(outputs.coherentRegions, Cost::CoherentRegionsFile)
+    });
+
+    if(outputs.defectMesh){
+        spdlog::info("Writing defect mesh data");
+        DxaSerialization::streamMeshToFile(
+            outputBase + "_defect_mesh.parquet", results.defectMesh, results.structure, true
+        );
+        results.defectMesh.clear();
+    }
+    steps.next();
+
+    if(outputs.dislocations){
+        spdlog::info("Writing dislocations data");
+        DxaSerialization::streamDislocationsToFile(
+            outputBase + "_dislocations.parquet",
+            outputBase + "_dislocation_summary.parquet",
+            &results.network,
+            &results.frame.simulationCell,
+            outputs.dislocationOptions,
+            &results.structure
+        );
+    }
+    steps.next();
+
+    if(outputs.interfaceMesh){
+        spdlog::info("Writing interface mesh data");
+        DxaSerialization::streamMeshToFile(
+            outputBase + "_interface_mesh.parquet",
+            results.interfaceMesh,
+            results.structure,
+            true,
+            DxaSerialization::InterfaceMeshFlags{
+                results.interfaceMesh.isCompletelyGood(),
+                results.interfaceMesh.isCompletelyBad()
+            }
+        );
+    }
+    steps.next();
+
+    if(outputs.tessellation){
+        spdlog::info("Writing Delaunay tessellation data");
+        DxaSerialization::streamDelaunayTessellationToFile(
+            outputBase + "_delaunay_tessellation.parquet", results.tessellation
+        );
+    }
+    steps.next();
+
+    if(outputs.atoms){
+        spdlog::info("Writing structure identification data");
+        StructureIdentificationExport::streamStructureIdentificationToParquet(
+            outputBase + "_atoms.parquet", results.frame, results.structure
+        );
+    }
+    steps.next();
+
+    if(outputs.coreAtoms){
+        writeCoreAtoms(
+            outputBase + "_core_atoms.parquet", results.frame, results.structure, results.coreAtomDislocationIds
+        );
+    }
+    steps.next();
+
+    if(outputs.coherentRegions){
+        spdlog::info("Writing coherent crystalline region data");
+        DxaSerialization::streamCoherentCrystallineRegionsToFile(
+            outputBase + "_coherent_crystalline_regions.parquet", results.frame, results.structure
+        );
+    }
+
+    spdlog::info("[{:>6}ms] Export", millisecondsSince(timer));
+}
+
 }
 
 DislocationAnalysis::DislocationAnalysis()
@@ -89,24 +426,26 @@ DislocationAnalysis::DislocationAnalysis()
       _clipPbcSegments(true),
       _coverDomainWithFiniteTets(false){}
 
-void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::string& outputFile){
-    spdlog::info("Processing frame {} with {} atoms", frame.timestep, frame.natoms);
-    auto tTotal = std::chrono::high_resolution_clock::now();
-    auto tStep = tTotal;
-
-    auto elapsed = [&](){
-        auto now = std::chrono::high_resolution_clock::now();
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - tStep).count();
-        tStep = now;
-        return ms;
+DislocationOutputs DislocationAnalysis::outputsFor(const std::string& outputBase) const{
+    const bool writes = !outputBase.empty();
+    return {
+        .defectMesh = writes && _exportDefectMesh,
+        .dislocations = writes && _exportDislocations,
+        .interfaceMesh = writes && _exportInterfaceMesh,
+        .tessellation = writes && _exportDelaunayTessellation,
+        .atoms = writes && _exportStructureIdentification,
+        .coreAtoms = writes && _markCoreAtoms,
+        .coherentRegions = writes && _exportCoherentCrystallineRegions,
+        .dislocationOptions = {
+            _clipPbcSegments,
+            _exportCircuitInformation,
+            _exportDislocationNetworkStats,
+            _exportJunctions
+        },
     };
+}
 
-    FrameAdapter::PreparedAnalysisInput prepared;
-    std::string frameError;
-    if(!FrameAdapter::prepareAnalysisInput(frame, prepared, &frameError)){
-        throw std::runtime_error(frameError);
-    }
-
+void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::string& outputBase){
     if(_clustersTablePath.empty() || _clusterTransitionsPath.empty()){
         throw std::runtime_error("OpenDXA requires --clusters_table and --clusters_transitions for reconstruct Cluster Graph");
     }
@@ -114,310 +453,75 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
         throw std::runtime_error("OpenDXA requires --neighbor_lattice (per-atom neighbor topology parquet) for reconstruct Cluster Graph");
     }
 
-    std::shared_ptr<ParticleProperty> positions = std::move(prepared.positions);
+    spdlog::info("Processing frame {} with {} atoms", frame.timestep, frame.natoms);
+    const Stopwatch timer;
 
-    ReconstructedStructureContext context(positions.get(), frame.simulationCell);
-    auto structureAnalysis = std::make_unique<StructureAnalysis>(context);
+    FrameAdapter::PreparedAnalysisInput input;
+    std::string inputError;
+    if(!FrameAdapter::prepareAnalysisInput(frame, input, &inputError)){
+        throw std::runtime_error(inputError);
+    }
 
-    // The outputs this run writes, in the units of the phase weights below; skipped ones weigh nothing.
-    const bool writesOutputs = !outputFile.empty();
-    const bool needDefectMesh = _exportDefectMesh && writesOutputs;
-    const double defectMeshOutput = needDefectMesh ? 1.0 : 0.0;
-    const double dislocationsOutput = writesOutputs && _exportDislocations ? 0.2 : 0.0;
-    const double interfaceMeshOutput = writesOutputs && _exportInterfaceMesh ? 1.0 : 0.0;
-    const double tessellationOutput = writesOutputs && _exportDelaunayTessellation ? 8.0 : 0.0;
-    const double structureOutput = writesOutputs && _exportStructureIdentification ? 2.0 : 0.0;
-    const double coreAtomsOutput = writesOutputs && _markCoreAtoms ? 0.2 : 0.0;
-    const double regionsOutput = writesOutputs && _exportCoherentCrystallineRegions ? 3.0 : 0.0;
-
-    // Structure reconstruction, Delaunay tessellation, tessellation edges, vertex-to-cluster labels,
-    // ideal vectors, interface mesh, Burgers circuit tracing, core atom marking, defect mesh, line
-    // smoothing and outputs, weighed by the phase times logged on sample runs.
+    const DislocationOutputs outputs = outputsFor(outputBase);
     ProgressSteps steps({
-        2.0, 4.0, 1.0, 0.2, 1.5, 2.5, 6.0,
-        _markCoreAtoms ? 0.3 : 0.0,
-        needDefectMesh ? 0.6 : 0.0,
-        0.1,
-        defectMeshOutput + dislocationsOutput + interfaceMeshOutput + tessellationOutput
-            + structureOutput + coreAtomsOutput + regionsOutput
+        Cost::Reconstruction,
+        Cost::Tessellation,
+        Cost::ElasticMapping,
+        Cost::InterfaceMesh,
+        Cost::BurgersCircuits,
+        costIf(_markCoreAtoms, Cost::CoreAtoms),
+        costIf(outputs.defectMesh, Cost::DefectMesh),
+        Cost::LineSmoothing,
+        outputsCost(outputs)
     });
-    JobProgress::instance().setText("Reconstructing structure from the upstream contract");
-    spdlog::info("Reconstructing structure from the upstream contract...");
-    {
-        std::string reconstructionError;
-        if(!ReconstructedStructureLoader::load(
-            frame,
-            _neighborLatticePath,
-            {_clustersTablePath, _clusterTransitionsPath},
-            *structureAnalysis,
-            context,
-            &reconstructionError
-        )){
-            throw std::runtime_error(reconstructionError);
-        }
-    }
 
-    const ClusterGraph& clusterGraph = structureAnalysis->clusterGraph();
-    const auto clusterCount = std::count_if(
-        clusterGraph.clusters().begin(), clusterGraph.clusters().end(),
-        [](const Cluster* cluster){ return cluster->id != 0; }
-    );
-    std::size_t clusteredAtoms = 0;
-    if(context.atomClusters){
-        const int* atomClusters = context.atomClusters->constDataInt();
-        clusteredAtoms = static_cast<std::size_t>(std::count_if(
-            atomClusters, atomClusters + context.atomClusters->size(),
-            [](int clusterId){ return clusterId != 0; }
-        ));
-    }
-    spdlog::info(
-        "[{:>6}ms] Structure reconstruction: {} clusters, {} transitions, {} of {} atoms in clusters ({:.1f}%)",
-        elapsed(), clusterCount, clusterGraph.clusterTransitions().size(),
-        clusteredAtoms, context.atomCount(), percentOf(clusteredAtoms, context.atomCount())
-    );
+    JobProgress::instance().setText("Reconstructing structure from the upstream contract");
+    ReconstructedStructureContext context(input.positions.get(), frame.simulationCell);
+    StructureAnalysis structure(context);
+    reconstructStructure(frame, _neighborLatticePath, {_clustersTablePath, _clusterTransitionsPath}, structure, context);
 
     steps.next("Building the Delaunay tessellation");
-
     DelaunayTessellation tessellation;
-    double ghostLayerSize = _ghostLayerScale * structureAnalysis->maximumNeighborDistance();
-    spdlog::info("Building Delaunay tessellation (ghost layer {:.2f})...", ghostLayerSize);
-    tessellation.generateTessellation(
-        context.simCell,
-        context.positions->constDataPoint3(),
-        context.atomCount(),
-        ghostLayerSize,
-        _coverDomainWithFiniteTets,
-        nullptr
-    );
-    spdlog::info("[{:>6}ms] Delaunay tessellation: {} primary tetrahedra", elapsed(), tessellation.numberOfPrimaryTetrahedra());
-    steps.next("Building tessellation edges");
+    tessellate(tessellation, context, _ghostLayerScale * structure.maximumNeighborDistance(), _coverDomainWithFiniteTets);
 
-    spdlog::info("Computing elastic mapping (crystal path search depth {})...", _crystalPathSteps);
-    ElasticMapping elasticMap(*structureAnalysis, tessellation);
-    elasticMap.generateTessellationEdges();
-    const auto edgesMs = elapsed();
-    spdlog::info("[{:>6}ms]   ... tessellation edges: {}", edgesMs, elasticMap.edgeCount());
-    steps.next("Assigning vertices to clusters");
-    elasticMap.assignVerticesToClusters();
-    const auto labelsMs = elapsed();
-    spdlog::info("[{:>6}ms]   ... vertex-to-cluster labels", labelsMs);
-    steps.next("Assigning ideal vectors to edges");
-    elasticMap.assignIdealVectorsToEdges(false, _crystalPathSteps);
-    const auto vectorsMs = elapsed();
-    spdlog::info("[{:>6}ms]   ... ideal vectors on edges", vectorsMs);
-    elasticMap.shrinkVertexStorage();
-    spdlog::info("[{:>6}ms] Elastic mapping", edgesMs + labelsMs + vectorsMs + elapsed());
+    steps.next("Computing the elastic mapping");
+    ElasticMapping elasticMap(structure, tessellation);
+    mapElastically(elasticMap, _crystalPathSteps);
+
     steps.next("Building the interface mesh");
-
-    spdlog::info(
-        "Building interface mesh (alpha {:.2f})...",
-        _interfaceAlphaScale * structureAnalysis->maximumNeighborDistance()
-    );
     InterfaceMesh interfaceMesh(elasticMap);
-    interfaceMesh.createMesh(structureAnalysis->maximumNeighborDistance(), _interfaceAlphaScale);
-    elasticMap.releaseCaches();
-    spdlog::info(
-        "[{:>6}ms] Interface mesh: {} facets, {} vertices{}",
-        elapsed(), interfaceMesh.faceCount(), interfaceMesh.vertexCount(),
-        interfaceMesh.isCompletelyGood() && !interfaceMesh.isCompletelyBad()
-            ? " (no elastically incompatible tetrahedra)" : ""
-    );
-    if(interfaceMesh.isCompletelyBad()){
-        spdlog::warn("No elastically compatible tetrahedra: there is no crystalline region to trace dislocations in");
-    }
-    steps.next("Tracing Burgers circuits");
+    buildInterfaceMesh(interfaceMesh, _interfaceAlphaScale);
 
-    const int maxTrialCircuitSize = static_cast<int>(_maxTrialCircuitSize);
-    const int circuitStretchability = static_cast<int>(_circuitStretchability);
-    spdlog::info(
-        "Tracing Burgers circuits (trial circuits up to {} edges, stretched up to {})...",
-        maxTrialCircuitSize, maxTrialCircuitSize + circuitStretchability
-    );
+    steps.next("Tracing Burgers circuits");
     BurgersLoopBuilder tracer(
         interfaceMesh,
-        &structureAnalysis->clusterGraph(),
-        maxTrialCircuitSize,
-        circuitStretchability
+        &structure.clusterGraph(),
+        static_cast<int>(_maxTrialCircuitSize),
+        static_cast<int>(_circuitStretchability)
     );
     tracer.setMarkCoreAtoms(_markCoreAtoms);
-    tracer.traceDislocationSegments();
-    tracer.finishDislocationSegments(_referenceTopologyName);
-    const NetworkTopology topology = summarizeNetworkTopology(tracer.network());
-    spdlog::info(
-        "[{:>6}ms] Burgers loop tracing: {} segments ({} closed loops, {} infinite lines), {} junctions, {} dangling ends",
-        elapsed(), tracer.network().segments().size(), topology.closedLoops, topology.infiniteLines,
-        topology.junctions, topology.danglingEnds
-    );
+    traceDislocations(tracer, _referenceTopologyName);
+
     steps.next("Marking core atoms");
+    const std::vector<int> coreAtomDislocationIds = _markCoreAtoms
+        ? markCoreAtoms(tracer, context.atomCount())
+        : std::vector<int>{};
 
-    std::vector<int> coreAtomDislocationIds;
-    if(_markCoreAtoms){
-        coreAtomDislocationIds = tracer.coreAtomDislocationIds(structureAnalysis->context().atomCount());
-        const auto markedAtoms = std::count_if(
-            coreAtomDislocationIds.begin(), coreAtomDislocationIds.end(),
-            [](int id){ return id >= 0; }
-        );
-        spdlog::info("[{:>6}ms] Core atom marking ({} atoms marked)", elapsed(), markedAtoms);
-    }
     steps.next("Building the defect mesh");
-
-    DislocationNetwork& network = tracer.network();
-
     InterfaceMeshTopology defectMesh;
-    if(needDefectMesh){
-        const bool watertight = interfaceMesh.generateDefectMesh(tracer, defectMesh);
-        if(!watertight){
-            spdlog::warn("Defect mesh is not watertight: at least one dislocation hole was left uncapped");
-        }
-        spdlog::info(
-            "[{:>6}ms] Defect mesh ({} of {} interface facets kept, {} vertices{})",
-            elapsed(), defectMesh.faceCount(), interfaceMesh.faceCount(), defectMesh.vertexCount(),
-            watertight ? ", watertight" : ""
-        );
+    if(outputs.defectMesh){
+        buildDefectMesh(interfaceMesh, tracer, defectMesh);
     }
+
     steps.next("Smoothing dislocation lines");
+    smoothLines(tracer.network(), _lineSmoothingLevel, _linePointInterval, frame.simulationCell.volume3D());
 
-    network.smoothDislocationLines(_lineSmoothingLevel, _linePointInterval);
-    double totalLineLength = 0.0;
-    for(const DislocationSegment* segment : network.segments()){
-        if(segment) totalLineLength += segment->calculateLength();
-    }
-    const double cellVolume = frame.simulationCell.volume3D();
-    spdlog::info(
-        "[{:>6}ms] Line smoothing: total line length {:.2f}, dislocation density {:.3e}",
-        elapsed(), totalLineLength, cellVolume > 0.0 ? totalLineLength / cellVolume : 0.0
-    );
     steps.next("Writing outputs");
+    writeOutputs(outputBase, outputs, {
+        frame, structure, tessellation, interfaceMesh, defectMesh, tracer.network(), coreAtomDislocationIds
+    });
 
-    if(!outputFile.empty()){
-        // Defect mesh, dislocations, interface mesh, Delaunay tessellation, structure identification,
-        // core atoms and coherent crystalline regions, weighed as above.
-        ProgressSteps outputSteps({
-            defectMeshOutput, dislocationsOutput, interfaceMeshOutput, tessellationOutput,
-            structureOutput, coreAtomsOutput, regionsOutput
-        });
-        if(needDefectMesh){
-            spdlog::info("Writing defect mesh data");
-            DxaSerialization::streamMeshToFile(
-                outputFile + "_defect_mesh.parquet",
-                defectMesh,
-                interfaceMesh.structureAnalysis(),
-                true
-            );
-
-            defectMesh.clear();
-        }
-        outputSteps.next();
-
-        if(_exportDislocations){
-            spdlog::info("Writing dislocations data");
-            const DxaSerialization::DislocationsExportOptions exportOptions{
-                _clipPbcSegments,
-                _exportCircuitInformation,
-                _exportDislocationNetworkStats,
-                _exportJunctions
-            };
-            DxaSerialization::streamDislocationsToFile(
-                outputFile + "_dislocations.parquet",
-                outputFile + "_dislocation_summary.parquet",
-                &network,
-                &frame.simulationCell,
-                exportOptions,
-                structureAnalysis.get()
-            );
-        }
-        outputSteps.next();
-
-        if(_exportInterfaceMesh){
-            spdlog::info("Writing interface mesh data");
-            DxaSerialization::streamMeshToFile(
-                outputFile + "_interface_mesh.parquet",
-                interfaceMesh,
-                interfaceMesh.structureAnalysis(),
-                true,
-                DxaSerialization::InterfaceMeshFlags{
-                    interfaceMesh.isCompletelyGood(),
-                    interfaceMesh.isCompletelyBad()
-                }
-            );
-        }
-        outputSteps.next();
-
-        if(_exportDelaunayTessellation){
-            spdlog::info("Writing Delaunay tessellation data");
-            DxaSerialization::streamDelaunayTessellationToFile(
-                outputFile + "_delaunay_tessellation.parquet", tessellation
-            );
-        }
-        outputSteps.next();
-
-        if(_exportStructureIdentification){
-            spdlog::info("Writing structure identification data");
-            StructureIdentificationExport::streamStructureIdentificationToParquet(
-                outputFile + "_atoms.parquet", frame, *structureAnalysis
-            );
-        }
-        outputSteps.next();
-
-        if(!coreAtomDislocationIds.empty()){
-            std::vector<std::size_t> coreAtoms;
-            for(std::size_t i = 0; i < coreAtomDislocationIds.size(); ++i){
-                if(coreAtomDislocationIds[i] >= 0) coreAtoms.push_back(i);
-            }
-
-            LammpsParser::Frame coreFrame;
-            coreFrame.timestep = frame.timestep;
-            coreFrame.natoms = static_cast<int>(coreAtoms.size());
-            coreFrame.simulationCell = frame.simulationCell;
-            coreFrame.positions.reserve(coreAtoms.size());
-            coreFrame.ids.reserve(coreAtoms.size());
-            for(const std::size_t source : coreAtoms){
-                coreFrame.positions.push_back(source < frame.positions.size()
-                    ? frame.positions[source] : Point3::Origin());
-                coreFrame.ids.push_back(source < frame.ids.size()
-                    ? frame.ids[source] : static_cast<int>(source));
-            }
-
-            const StructureContext& structureContext = structureAnalysis->context();
-            const int* structureTypes = structureContext.structureTypes
-                ? structureContext.structureTypes->constDataInt()
-                : nullptr;
-
-            spdlog::info("Writing core atom data ({} atoms)", coreAtoms.size());
-            streamAtomsToParquet(
-                outputFile + "_core_atoms.parquet",
-                coreFrame,
-                [&coreAtoms, structureTypes](std::size_t atomIndex){
-                    return std::string(structureTypeName(
-                        structureTypes
-                            ? structureTypes[coreAtoms[atomIndex]]
-                            : static_cast<int>(StructureType::OTHER)
-                    ));
-                },
-                [&coreAtoms, &coreAtomDislocationIds](ColumnarAtomWriter& writer, std::size_t atomIndex){
-                    writer.field("dislocation_id", coreAtomDislocationIds[coreAtoms[atomIndex]]);
-                }
-            );
-        }
-        outputSteps.next();
-
-        if(_exportCoherentCrystallineRegions){
-            spdlog::info("Writing coherent crystalline region data");
-            DxaSerialization::streamCoherentCrystallineRegionsToFile(
-                outputFile + "_coherent_crystalline_regions.parquet", frame, *structureAnalysis
-            );
-        }
-    }
-
-    spdlog::info("[{:>6}ms] Export", elapsed());
-
-    auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::high_resolution_clock::now() - tTotal).count();
-    spdlog::info("[{:>6}ms] TOTAL", totalMs);
-
-    tessellation.releaseMemory();
-    structureAnalysis.reset();
-    positions.reset();
+    spdlog::info("[{:>6}ms] TOTAL", millisecondsSince(timer));
 }
 
 }

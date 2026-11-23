@@ -9,11 +9,13 @@
 
 namespace Volt {
 
+struct DislocationOutputs;
+
 class DislocationAnalysis{
 public:
     DislocationAnalysis();
 
-    void compute(const LammpsParser::Frame &frame, const std::string& jsonOutputFile = "");
+    void compute(const LammpsParser::Frame &frame, const std::string& outputBase = "");
 
     void setReferenceTopology(std::string topologyName){
         _referenceTopologyName = std::move(topologyName);
@@ -108,6 +110,8 @@ public:
     }
 
 private:
+    DislocationOutputs outputsFor(const std::string& outputBase) const;
+
     std::string _referenceTopologyName;
 
     double _maxTrialCircuitSize;

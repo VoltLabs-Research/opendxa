@@ -72,6 +72,14 @@ public:
 		_markCoreAtoms = markCoreAtoms;
 	}
 
+	[[nodiscard]] int maxTrialCircuitSize() const noexcept{
+		return _maxBurgersCircuitSize;
+	}
+
+	[[nodiscard]] int maxExtendedCircuitSize() const noexcept{
+		return _maxExtendedBurgersCircuitSize;
+	}
+
 	[[nodiscard]] std::vector<int> coreAtomDislocationIds(std::size_t particleCount) const;
 
 private:
