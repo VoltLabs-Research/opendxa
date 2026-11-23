@@ -8,13 +8,31 @@
 #include <numeric>
 #include <cstdint>
 #include <algorithm>
-#include <thread>
+#include <limits>
+#include <mutex>
 
 namespace Volt{
 
 namespace{
 
+// Relative to the cell diagonal. The jitter breaks the exact degeneracies of a perfect lattice (four or more
+// cospherical points); it is hashed from the atom index so that it does not depend on the thread schedule.
+constexpr double kRelativeJitter = 1e-10;
 constexpr unsigned int kMaxDelaunayThreads = 16;
+
+std::uint64_t splitMix64(std::uint64_t z){
+	z += 0x9E3779B97F4A7C15ull;
+	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+	z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+	return z ^ (z >> 31);
+}
+
+void initializeGeogram(){
+	static std::mutex geogramMutex;
+	std::lock_guard<std::mutex> lock(geogramMutex);
+	GEO::initialize(GEO::GEOGRAM_NO_HANDLER);
+	GEO::set_assert_mode(GEO::ASSERT_ABORT);
+}
 
 }
 
@@ -26,61 +44,71 @@ void DelaunayTessellation::generateTessellation(
 	bool coverDomainWithFiniteTets,
 	const int* selectedPoints
 ){
-	static std::mutex geogramMutex;
-	{
-		std::lock_guard<std::mutex> lock(geogramMutex);
-		GEO::initialize(GEO::GEOGRAM_NO_HANDLER);
-		GEO::set_assert_mode(GEO::ASSERT_ABORT);
+	initializeGeogram();
+	insertPrimaryPoints(simCell, positions, numPoints, selectedPoints);
+	insertGhostImages(simCell, ghostLayerSize);
+	if(coverDomainWithFiniteTets){
+		addBoundingCorners(simCell, ghostLayerSize);
 	}
 
-	double lengthScale = (simCell.matrix().column(0) + simCell.matrix().column(1) + simCell.matrix().column(2)).length();
-	double epsilon = 1e-10 * lengthScale;
+	spdlog::info("  Geogram Delaunay: inserting {} points ({} primary + {} ghost)",
+		_pointData.size(), _primaryVertexCount, _pointData.size() - _primaryVertexCount);
+	triangulate();
+	classifyCells();
+}
 
-	auto jitterFor = [epsilon](std::size_t atomIndex, unsigned axis) -> double {
-		std::uint64_t z = static_cast<std::uint64_t>(atomIndex) * 3ull + axis;
-		z += 0x9E3779B97F4A7C15ull;
-		z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
-		z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
-		z ^= z >> 31;
+void DelaunayTessellation::insertPrimaryPoints(
+	const SimulationCell& simCell,
+	const Point3* positions,
+	size_t numPoints,
+	const int* selectedPoints
+){
+	const double lengthScale = (simCell.matrix().column(0) + simCell.matrix().column(1) + simCell.matrix().column(2)).length();
+	const double epsilon = kRelativeJitter * lengthScale;
+
+	auto jitter = [epsilon](std::size_t atomIndex, unsigned axis) -> double {
+		const std::uint64_t z = splitMix64(static_cast<std::uint64_t>(atomIndex) * 3ull + axis);
+		// The top 53 bits as a double in [0, 1).
 		const double unit = static_cast<double>(z >> 11) * (1.0 / 9007199254740992.0);
 		return epsilon * (2.0 * unit - 1.0);
+	};
+	auto jitteredPoint = [&](std::size_t atomIndex, const Point3& position){
+		const Point3 wp = simCell.wrapPoint(position);
+		return Point3(
+			wp.x() + jitter(atomIndex, 0),
+			wp.y() + jitter(atomIndex, 1),
+			wp.z() + jitter(atomIndex, 2)
+		);
 	};
 
 	if(!selectedPoints){
 		_pointData.resize(numPoints);
 		_particleIndices.resize(numPoints);
-
 		tbb::parallel_for(tbb::blocked_range<size_t>(0, numPoints, 4096),
 			[&](const tbb::blocked_range<size_t>& r){
 			for(size_t i = r.begin(); i < r.end(); ++i){
-				Point3 wp = simCell.wrapPoint(positions[i]);
-				_pointData[i] = Point3(
-					(double)wp.x() + jitterFor(i, 0),
-					(double)wp.y() + jitterFor(i, 1),
-					(double)wp.z() + jitterFor(i, 2)
-				);
+				_pointData[i] = jitteredPoint(i, positions[i]);
 				_particleIndices[i] = i;
 			}
 		});
-		_primaryVertexCount = numPoints;
 	}else{
 		_particleIndices.clear();
 		_pointData.clear();
 		_particleIndices.reserve(numPoints);
 		_pointData.reserve(numPoints);
-		for(size_t i = 0; i < numPoints; i++, ++positions){
-			if(!*selectedPoints++){ continue; }
-			Point3 wp = simCell.wrapPoint(*positions);
-			_pointData.emplace_back(
-				(double)wp.x() + jitterFor(i, 0),
-				(double)wp.y() + jitterFor(i, 1),
-				(double)wp.z() + jitterFor(i, 2)
-			);
+		for(size_t i = 0; i < numPoints; i++){
+			if(!selectedPoints[i]) continue;
+			_pointData.push_back(jitteredPoint(i, positions[i]));
 			_particleIndices.push_back(i);
 		}
-		_primaryVertexCount = _particleIndices.size();
 	}
+	_primaryVertexCount = _particleIndices.size();
+}
 
+// Adds, for every periodic image of the cell within the ghost layer, the images of the primary points that fall
+// inside the cell widened by the ghost layer. Images are counted first so that each one can be written in parallel
+// at a fixed offset, in the same order as a serial pass.
+void DelaunayTessellation::insertGhostImages(const SimulationCell& simCell, double ghostLayerSize){
 	Vector3I stencilCount;
 	double cuts[3][2];
 	Vector3 cellNormals[3];
@@ -88,44 +116,39 @@ void DelaunayTessellation::generateTessellation(
 		cellNormals[dim] = simCell.cellNormalVector(dim);
 		cuts[dim][0] = cellNormals[dim].dot(simCell.reducedToAbsolute(Point3(0,0,0)) - Point3::Origin());
 		cuts[dim][1] = cellNormals[dim].dot(simCell.reducedToAbsolute(Point3(1,1,1)) - Point3::Origin());
-		if(simCell.hasPbc(dim)){
-			stencilCount[dim] = (int)ceil(ghostLayerSize / simCell.matrix().column(dim).dot(cellNormals[dim]));
-			cuts[dim][0] -= ghostLayerSize;
-			cuts[dim][1] += ghostLayerSize;
-		}else{
-			stencilCount[dim] = 0;
-			cuts[dim][0] -= ghostLayerSize;
-			cuts[dim][1] += ghostLayerSize;
-		}
+		stencilCount[dim] = simCell.hasPbc(dim)
+			? (int)ceil(ghostLayerSize / simCell.matrix().column(dim).dot(cellNormals[dim]))
+			: 0;
+		cuts[dim][0] -= ghostLayerSize;
+		cuts[dim][1] += ghostLayerSize;
 	}
 
-	std::vector<Vector3I> ghostShifts;
+	auto isInsideGhostLayer = [&](const Point3& image){
+		for(size_t dim = 0; dim < 3; ++dim){
+			if(!simCell.hasPbc(dim)) continue;
+			const double d = cellNormals[dim].dot(image - Point3::Origin());
+			if(d < cuts[dim][0] || d > cuts[dim][1]) return false;
+		}
+		return true;
+	};
+
+	std::vector<Vector3> ghostShifts;
 	ghostShifts.reserve(static_cast<size_t>(
 		(2 * stencilCount[0] + 1) * (2 * stencilCount[1] + 1) * (2 * stencilCount[2] + 1) - 1));
 	for(int ix = -stencilCount[0]; ix <= +stencilCount[0]; ix++)
 		for(int iy = -stencilCount[1]; iy <= +stencilCount[1]; iy++)
 			for(int iz = -stencilCount[2]; iz <= +stencilCount[2]; iz++){
 				if(ix == 0 && iy == 0 && iz == 0) continue;
-				ghostShifts.emplace_back(ix, iy, iz);
+				ghostShifts.push_back(simCell.reducedToAbsolute(Vector3(ix, iy, iz)));
 			}
 
 	std::vector<size_t> ghostCounts(ghostShifts.size(), 0);
 	tbb::parallel_for(tbb::blocked_range<size_t>(0, ghostShifts.size(), 8),
 		[&](const tbb::blocked_range<size_t>& r){
 		for(size_t shiftIdx = r.begin(); shiftIdx < r.end(); ++shiftIdx){
-			const auto& imageShift = ghostShifts[shiftIdx];
-			Vector3 shift = simCell.reducedToAbsolute(Vector3(imageShift.x(), imageShift.y(), imageShift.z()));
 			size_t count = 0;
 			for(size_t vertexIndex = 0; vertexIndex < _primaryVertexCount; ++vertexIndex){
-				Point3 pimage = _pointData[vertexIndex] + shift;
-				bool isClipped = false;
-				for(size_t dim = 0; dim < 3; ++dim){
-					if(simCell.hasPbc(dim)){
-						double d = cellNormals[dim].dot(pimage - Point3::Origin());
-						if(d < cuts[dim][0] || d > cuts[dim][1]){ isClipped = true; break; }
-					}
-				}
-				if(!isClipped) ++count;
+				if(isInsideGhostLayer(_pointData[vertexIndex] + ghostShifts[shiftIdx])) ++count;
 			}
 			ghostCounts[shiftIdx] = count;
 		}
@@ -145,45 +168,31 @@ void DelaunayTessellation::generateTessellation(
 	tbb::parallel_for(tbb::blocked_range<size_t>(0, ghostShifts.size(), 8),
 		[&](const tbb::blocked_range<size_t>& r){
 		for(size_t shiftIdx = r.begin(); shiftIdx < r.end(); ++shiftIdx){
-			const auto& imageShift = ghostShifts[shiftIdx];
-			Vector3 shift = simCell.reducedToAbsolute(Vector3(imageShift.x(), imageShift.y(), imageShift.z()));
 			size_t writeIndex = basePointCount + ghostOffsets[shiftIdx];
 			for(size_t vertexIndex = 0; vertexIndex < _primaryVertexCount; ++vertexIndex){
-				Point3 pimage = _pointData[vertexIndex] + shift;
-				bool isClipped = false;
-				for(size_t dim = 0; dim < 3; ++dim){
-					if(simCell.hasPbc(dim)){
-						double d = cellNormals[dim].dot(pimage - Point3::Origin());
-						if(d < cuts[dim][0] || d > cuts[dim][1]){ isClipped = true; break; }
-					}
-				}
-				if(!isClipped){
-					_pointData[writeIndex] = pimage;
-					_particleIndices[writeIndex] = _particleIndices[vertexIndex];
-					++writeIndex;
-				}
+				const Point3 image = _pointData[vertexIndex] + ghostShifts[shiftIdx];
+				if(!isInsideGhostLayer(image)) continue;
+				_pointData[writeIndex] = image;
+				_particleIndices[writeIndex] = _particleIndices[vertexIndex];
+				++writeIndex;
 			}
 		}
 	});
+}
 
-	std::vector<Vector3I>().swap(ghostShifts);
-	std::vector<size_t>().swap(ghostCounts);
-	std::vector<size_t>().swap(ghostOffsets);
-
-	if(coverDomainWithFiniteTets){
-		Box3 bb = Box3(Point3(0, 0, 0), Point3(1, 1, 1)).transformed(simCell.matrix());
-		bb.addPoints(_pointData.data(), _pointData.size());
-		bb = bb.padBox(ghostLayerSize);
-		for(size_t i = 0; i < 8; i++){
-			Point3 corner = bb[static_cast<int>(i)];
-			_pointData.push_back(corner);
-			_particleIndices.push_back(std::numeric_limits<size_t>::max());
-		}
+// The corners of a box around every point make the convex hull cover the whole domain with finite cells.
+// They stand for no particle.
+void DelaunayTessellation::addBoundingCorners(const SimulationCell& simCell, double ghostLayerSize){
+	Box3 bb = Box3(Point3(0, 0, 0), Point3(1, 1, 1)).transformed(simCell.matrix());
+	bb.addPoints(_pointData.data(), _pointData.size());
+	bb = bb.padBox(ghostLayerSize);
+	for(int corner = 0; corner < 8; corner++){
+		_pointData.push_back(bb[corner]);
+		_particleIndices.push_back(std::numeric_limits<size_t>::max());
 	}
+}
 
-	spdlog::info("  Geogram Delaunay: inserting {} points ({} primary + {} ghost)",
-		_pointData.size(), _primaryVertexCount, _pointData.size() - _primaryVertexCount);
-
+void DelaunayTessellation::triangulate(){
 	const char* backend = "BDEL";
 	unsigned int delaunayThreads = 1;
 #ifdef VOLT_HAVE_PARALLEL_DELAUNAY
@@ -207,15 +216,17 @@ void DelaunayTessellation::generateTessellation(
 
 	spdlog::info("  Geogram Delaunay ({}, {} threads) complete: {} cells",
 		backend, delaunayThreads, _dt->nb_cells());
+}
 
+// Marks the cells that belong to a ghost image and numbers the others in cell order.
+void DelaunayTessellation::classifyCells(){
 	const size_t numCells = _dt->nb_cells();
 	_cellInfo.resize(numCells);
 
 	tbb::parallel_for(tbb::blocked_range<size_t>(0, numCells, 4096),
 		[&](const tbb::blocked_range<size_t>& r){
 		for(size_t i = r.begin(); i < r.end(); ++i){
-			CellHandle cell = static_cast<CellHandle>(i);
-			_cellInfo[i].isGhost = classifyGhostCell(cell);
+			_cellInfo[i].isGhost = classifyGhostCell(static_cast<CellHandle>(i));
 			_cellInfo[i].index = -1;
 		}
 	});

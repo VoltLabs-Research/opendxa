@@ -155,6 +155,11 @@ public:
 
 
 private:
+    void insertPrimaryPoints(const SimulationCell& simCell, const Point3* positions, size_t numPoints, const int* selectedPoints);
+    void insertGhostImages(const SimulationCell& simCell, double ghostLayerSize);
+    void addBoundingCorners(const SimulationCell& simCell, double ghostLayerSize);
+    void triangulate();
+    void classifyCells();
     bool classifyGhostCell(CellHandle cell) const;
 
     GEO::Delaunay_var _dt;
