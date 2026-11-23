@@ -56,14 +56,6 @@ public:
             other->_oppositeEdge = this;
         }
 
-        Edge* unlinkFromOppositeEdge() noexcept{
-            assert(_oppositeEdge && _oppositeEdge->_oppositeEdge == this);
-            Edge* other = _oppositeEdge;
-            _oppositeEdge = nullptr;
-            other->_oppositeEdge = nullptr;
-            return other;
-        }
-
     public:
         Edge(Vertex* v2, Face* f) noexcept
             : _oppositeEdge(nullptr)
@@ -97,10 +89,6 @@ public:
 			return _pos;
 		}
 
-        void setPos(const Point3& p) noexcept{
-			_pos = p; 
-		}
-
         [[nodiscard]] int index() const noexcept{
 			return _index;
 		}
@@ -108,25 +96,6 @@ public:
         [[nodiscard]] std::size_t numEdges() const noexcept{
 			return _numEdges;
 		}
-
-        [[nodiscard]] int numManifolds() const{
-            int count = 0;
-            std::vector<Edge*> visited;
-            for(Edge* start = edges(); start; start = start->nextVertexEdge()){
-                if(std::find(visited.begin(), visited.end(), start) != visited.end()){
-                    continue;
-				}
-
-                ++count;
-                Edge* cur = start;
-                do{
-                    visited.push_back(cur);
-                    cur = cur->prevFaceEdge()->oppositeEdge();
-                }while(cur != start);
-            }
-
-            return count;
-        }
 
         void transferEdgeToVertex(Edge* e, Vertex* v) noexcept{
             removeEdge(e);
@@ -187,10 +156,6 @@ public:
 			return _index;
 		}
 
-        [[nodiscard]] unsigned int flags() const noexcept{
-			return _flags;
-		}
-
         [[nodiscard]] bool testFlag(unsigned int f) const noexcept{
 			return _flags & f;
 		}
@@ -202,17 +167,6 @@ public:
         void clearFlag(unsigned int f) const noexcept{
 			_flags &= ~f;
 		}
-
-        [[nodiscard]] std::size_t edgeCount() const{
-            assert(edges());
-            std::size_t cnt = 0;
-            Edge* e = edges();
-            do{
-                ++cnt;
-                e = e->nextFaceEdge();
-            }while(e != edges());
-            return cnt;
-        }
 
         [[nodiscard]] Edge* findEdge(Vertex* v1, Vertex* v2) const noexcept{
             if(!edges()) return nullptr;
@@ -243,9 +197,8 @@ public:
 
 public:
     HalfEdgeMesh() = default;
-    HalfEdgeMesh(const HalfEdgeMesh& o){
-		*this = o;
-	}
+    HalfEdgeMesh(const HalfEdgeMesh&) = delete;
+    HalfEdgeMesh& operator=(const HalfEdgeMesh&) = delete;
 
     void clear() noexcept{
         _vertices.clear();
@@ -253,57 +206,6 @@ public:
         _vertexPool.clear();
         _edgePool.clear();
         _facePool.clear();
-    }
-
-    void smoothVertices(int iterations){
-        if(iterations <= 0) return;
-
-        double lambda = 0.5;
-        double mu = -0.52;
-
-        std::vector<Point3> newPositions(vertexCount());
-
-        for(int iter = 0; iter < iterations; ++iter){
-            for(Vertex* v : _vertices) {
-                Vector3 sum = Vector3::Zero();
-                int count = 0;
-
-                for(Edge* e = v->edges(); e; e = e->nextVertexEdge()){
-                    sum += e->vertex2()->pos() - v->pos();
-                    ++count;
-                }
-
-				Vector3 avg = Vector3::Zero();
-				if(count > 0){
-					avg = sum / static_cast<double>(count);
-				}
-                newPositions[v->index()] = v->pos() + lambda * avg;
-            }
-
-            for(Vertex* v : _vertices){
-                v->setPos(newPositions[v->index()]);
-            }
-
-            for(Vertex* v : _vertices){
-                Vector3 sum = Vector3::Zero();
-                int count = 0;
-
-                for(Edge* e = v->edges(); e; e = e->nextVertexEdge()){
-                    sum += e->vertex2()->pos() - v->pos();
-                    ++count;
-                }
-
-				Vector3 avg = Vector3::Zero();
-				if(count > 0){
-					avg = sum / static_cast<double>(count);
-				}
-                newPositions[v->index()] = v->pos() + mu * avg;
-            }
-
-            for(Vertex* v : _vertices){
-                v->setPos(newPositions[v->index()]);
-            }
-        }
     }
 
     [[nodiscard]] const std::vector<Vertex*>& vertices() const noexcept{
@@ -387,52 +289,6 @@ public:
         return closed;
     }
 
-    template<class EB2, class FB2, class VB2>
-    void copyFrom(const HalfEdgeMesh<EB2, FB2, VB2>& o){
-        clear();
-        reserveVertices(o.vertexCount());
-        for(auto* v : o.vertices()){
-            createVertex(v->pos());
-		}
-
-        reserveFaces(o.faceCount());
-        for(auto* f : o.faces()){
-            Face* fc = createFace();
-            if(!f->edges()) continue;
-            Edge* eo = f->edges();
-            do{
-                Vertex* v1 = vertex(eo->vertex1()->index());
-                Vertex* v2 = vertex(eo->vertex2()->index());
-                createEdge(v1, v2, fc);
-                eo = eo->nextFaceEdge();
-            }while (eo != f->edges());
-        }
-
-        linkCopiedOpposites(o);
-    }
-
-    HalfEdgeMesh& operator=(const HalfEdgeMesh& o){
-        copyFrom(o);
-        return *this;
-    }
-
-    void swap(HalfEdgeMesh& o) noexcept{
-        _vertices.swap(o._vertices);
-        _faces.swap(o._faces);
-        _vertexPool.swap(o._vertexPool);
-        _edgePool.swap(o._edgePool);
-        _facePool.swap(o._facePool);
-    }
-
-    [[nodiscard]] bool isClosed() const noexcept{
-        for(Vertex* v : _vertices){
-            for (Edge* e = v->edges(); e; e = e->nextVertexEdge()){
-                if(!e->oppositeEdge()) return false;
-			}
-		}
-        return true;
-    }
-
     Face* createFace(){
         tbb::spin_mutex::scoped_lock lock(mutex);
         auto* f = _facePool.construct(static_cast<int>(faceCount()));
@@ -460,28 +316,6 @@ public:
     }
 
 public:
-    template<class EB2, class FB2, class VB2>
-    void linkCopiedOpposites(const HalfEdgeMesh<EB2, FB2, VB2>& o){
-        for(std::size_t i = 0; i < faceCount(); ++i){
-            Edge* fo = o.faces()[i]->edges();
-            Edge* fc = _faces[i]->edges();
-            if(!fo) continue;
-            do{
-                if(fo->oppositeEdge() && !fc->oppositeEdge()){
-                    Face* oppF = face(fo->oppositeEdge()->face()->index());
-                    for(Edge* oe = oppF->edges(); oe; oe = oe->nextFaceEdge()){
-                        if(oe->vertex1() == fc->vertex2() && oe->vertex2() == fc->vertex1()){
-                            fc->linkToOppositeEdge(oe);
-                            break;
-                        }
-                    }
-                }
-                fo = fo->nextFaceEdge();
-                fc = fc->nextFaceEdge();
-            }while(fo != o.faces()[i]->edges());
-        }
-    }
-
 	class InternalVertex : public Vertex{
     public:
         InternalVertex(const Point3& p, int idx) noexcept : Vertex(p, idx){}
