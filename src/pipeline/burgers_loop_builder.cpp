@@ -76,55 +76,57 @@ void BurgersLoopBuilder::discardCircuit(BurgersCircuit* circuit){
     _unusedCircuit = circuit;
 }
 
+namespace{
+
+// Drops the points each end traced after its circuit stored its cap, so that a dangling line stops at its cap.
+void trimPreliminaryPoints(DislocationSegment& segment){
+    segment.trimEnds(segment.backwardNode().circuit->numPreliminaryPoints, segment.forwardNode().circuit->numPreliminaryPoints);
+}
+
+// Expresses b in a cluster of the reference structure when one transition links the segment's cluster to such a cluster.
+void expressInReferenceStructure(DislocationSegment& segment, std::string_view referenceTopologyName){
+    auto* cluster = segment.burgersVector.cluster();
+    if(cluster->topologyName == referenceTopologyName) return;
+
+    for(auto* t = cluster->transitions; t && t->distance <= 1; t = t->next){
+        if(t->cluster2->topologyName == referenceTopologyName){
+            segment.burgersVector = ClusterVector(
+                t->transform(segment.burgersVector.localVec()),
+                t->cluster2
+            );
+            return;
+        }
+    }
+}
+
+// Runs every line towards +x, +y or +z, along the axis its end-to-end vector is longest on, whichever way it was
+// traced. Closed loops, whose ends coincide, keep their direction.
+void orientCanonically(DislocationSegment& segment){
+    const auto& line = segment.line;
+    if(line.empty()) return;
+    const Vector3 dir = line.back() - line.front();
+    if(dir.isZero(CA_ATOM_VECTOR_EPSILON)) return;
+
+    const auto absx = std::abs(dir.x()), absy = std::abs(dir.y()), absz = std::abs(dir.z());
+    if((absx >= absy && absx >= absz && dir.x() < 0) ||
+       (absy >= absx && absy >= absz && dir.y() < 0) ||
+       (absz >= absx && absz >= absy && dir.z() < 0))
+    {
+        segment.flipOrientation();
+    }
+}
+
+}
+
 void BurgersLoopBuilder::finishDislocationSegments(std::string_view referenceTopologyName){
-    auto& segs = network().segments();
-
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, segs.size()), 
-        [&](const tbb::blocked_range<size_t>& r){
-            for(size_t i = r.begin(); i != r.end(); ++i){
-                auto* s = segs[i];
-                s->id = static_cast<int>(i);
-                s->trimEnds(s->backwardNode().circuit->numPreliminaryPoints, s->forwardNode().circuit->numPreliminaryPoints);
-            }
-	});
-
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, segs.size()), 
-        [&](const tbb::blocked_range<size_t>& r){
-            for(size_t i = r.begin(); i != r.end(); ++i){
-                auto* s = segs[i];
-                auto* orig = s->burgersVector.cluster();
-                if(orig->topologyName != referenceTopologyName){
-                    for(auto* t = orig->transitions; t && t->distance <= 1; t = t->next){
-                        if(t->cluster2->topologyName == referenceTopologyName){
-                            s->burgersVector = ClusterVector(
-                                t->transform(s->burgersVector.localVec()),
-                                t->cluster2
-                            );
-                            break;
-                        }
-                    }
-                }
-            }
-	});
-
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, segs.size()), 
-        [&](const tbb::blocked_range<size_t>& r){
-            for(size_t i = r.begin(); i != r.end(); ++i){
-                auto* s = segs[i];
-                auto& line = s->line;
-                if (line.empty()) continue;
-                Vector3 dir = line.back() - line.front();
-                if(dir.isZero(CA_ATOM_VECTOR_EPSILON)) continue;
-
-                auto absx = std::abs(dir.x()), absy = std::abs(dir.y()), absz = std::abs(dir.z());
-                if((absx >= absy && absx >= absz && dir.x() < 0) ||
-                   (absy >= absx && absy >= absz && dir.y() < 0) ||
-                   (absz >= absx && absz >= absy && dir.z() < 0))
-                {
-                    s->flipOrientation();
-                }
-            }
-	});
+    const auto& segments = network().segments();
+    tbb::parallel_for(size_t{0}, segments.size(), [&](size_t i){
+        DislocationSegment& segment = *segments[i];
+        segment.id = static_cast<int>(i);
+        trimPreliminaryPoints(segment);
+        expressInReferenceStructure(segment, referenceTopologyName);
+        orientCanonically(segment);
+    });
 }
 
 namespace{
