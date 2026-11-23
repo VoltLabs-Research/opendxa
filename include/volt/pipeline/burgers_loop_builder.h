@@ -5,9 +5,6 @@
 #include <volt/helpers/dislocation_network.h>
 #include <volt/pipeline/defect_cell_index.h>
 #include <volt/pipeline/interface_mesh.h>
-#include <boost/random/uniform_int_distribution.hpp>
-#include <boost/random/mersenne_twister.hpp>
-#include <boost/random/uniform_int.hpp>
 #include <tbb/spin_mutex.h>
 #include <string_view>
 #include <atomic>
@@ -34,19 +31,13 @@ public:
 
 	BurgersLoopBuilder(InterfaceMesh& mesh, ClusterGraph* clusterGraph, int maxTrialCircuitSize, int maxCircuitElongation) :
 		_mesh(mesh),
-		_clusterGraph(clusterGraph),
 		_network(new DislocationNetwork(clusterGraph)),
 		_unusedCircuit(nullptr),
-		_edgeStartIndex(0),
 		_maxBurgersCircuitSize(maxTrialCircuitSize),
 		_maxExtendedBurgersCircuitSize(maxTrialCircuitSize + maxCircuitElongation){}
 
 	const InterfaceMesh& mesh() const{
 		return _mesh;
-	}
-
-	ClusterGraph& clusterGraph(){
-		return *_clusterGraph;
 	}
 
 	DislocationNetwork& network(){
@@ -115,15 +106,12 @@ private:
 
 	InterfaceMesh& _mesh;
 	std::shared_ptr<DislocationNetwork> _network;
-	ClusterGraph* _clusterGraph;
 	tbb::spin_mutex _circuit_pool_mutex;
-	tbb::spin_mutex _segmentMutex;
 
 	int _maxBurgersCircuitSize;
 	int _maxExtendedBurgersCircuitSize;
 
 	MemoryPool<BurgersCircuit> _circuitPool;
-	boost::random::mt19937 _rng;
 	std::vector<DislocationNode*> _danglingNodes;
 	BurgersCircuit* _unusedCircuit;
 	mutable std::atomic<size_t> _edgeStartIndex{0};
