@@ -96,6 +96,12 @@ private:
 	bool tryInsertOneCircuitEdge(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, bool markSwept);
 
 	void joinSegments(int maxCircuitLength);
+	void createSecondarySegments(int maxCircuitLength);
+	void linkAdjacentCircuits();
+	void joinArms(DislocationNode* node);
+	void formJunction(DislocationNode* node, const Point3& centerOfMass);
+	void closeLoop(DislocationNode* node1, DislocationNode* node2);
+	void mergeSegments(DislocationNode* node1, DislocationNode* node2);
 
 	Vector3 calculateShiftVector(const Point3& a, const Point3& b) const{
 		Vector3 d = cell().absoluteToReduced(b - a);

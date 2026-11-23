@@ -863,9 +863,22 @@ std::vector<int> BurgersLoopBuilder::coreAtomDislocationIds(std::size_t particle
 }
 
 void BurgersLoopBuilder::joinSegments(int maxCircuitLength){
+	createSecondarySegments(maxCircuitLength);
+	linkAdjacentCircuits();
+	for(DislocationNode* node : danglingNodes()){
+		joinArms(node);
+	}
+
+	std::erase_if(_danglingNodes, [](DislocationNode* node){
+		return !node->isDangling();
+	});
+}
+
+// Tries a secondary segment wherever a dangling circuit borders edges no circuit holds, as where a line branches. Also
+// visits the nodes of the segments it creates.
+void BurgersLoopBuilder::createSecondarySegments(int maxCircuitLength){
 	for(size_t nodeIndex = 0; nodeIndex < danglingNodes().size(); nodeIndex++){
-		DislocationNode* node = danglingNodes()[nodeIndex];
-		BurgersCircuit* circuit = node->circuit;
+		BurgersCircuit* circuit = danglingNodes()[nodeIndex]->circuit;
 		assert(circuit->isDangling);
 
 		InterfaceMesh::Edge* edge = circuit->firstEdge;
@@ -886,7 +899,11 @@ void BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 		}
 		while(edge != circuit->firstEdge);
 	}
+}
 
+// Puts the nodes whose circuits share edges into one junction ring, and marks a circuit completely blocked when other
+// circuits hold all the edges beyond it.
+void BurgersLoopBuilder::linkAdjacentCircuits(){
 	for(DislocationNode* node : danglingNodes()){
 		BurgersCircuit* circuit = node->circuit;
 		assert(circuit->isDangling);
@@ -899,156 +916,144 @@ void BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 			if(adjacentCircuit == nullptr){
 				circuit->isCompletelyBlocked = false;
 				break;
-			}else if(adjacentCircuit != circuit){
+			}
+			if(adjacentCircuit != circuit){
 				assert(adjacentCircuit->isDangling);
 				DislocationNode* adjacentNode = adjacentCircuit->dislocationNode;
-				if(node->formsJunctionWith(adjacentNode) == false){
+				if(!node->formsJunctionWith(adjacentNode)){
 					node->connectNodes(adjacentNode);
 				}
 			}
 			edge = edge->nextCircuitEdge;
 		}while(edge != circuit->firstEdge);
 	}
+}
 
-	for(DislocationNode* node : danglingNodes()){
-		BurgersCircuit* circuit = node->circuit;
+// Joins the arms of node's junction ring once all their circuits are completely blocked: three or more arms meet at a
+// junction, and two arms are one line, which closes a loop or merges two segments. A ring with an arm that can still
+// move is dissolved; the next length links it again.
+void BurgersLoopBuilder::joinArms(DislocationNode* node){
+	if(!node->circuit->isDangling) return;
+	if(!node->circuit->isCompletelyBlocked){
+		node->dissolveJunction();
+		return;
+	}
+	if(node->junctionRing == node) return;
+	assert(node->segment->replacedWith == nullptr);
 
-		if(circuit->isDangling == false) continue;
-
-		if(!circuit->isCompletelyBlocked){
+	Vector3 centerOfMassVector = Vector3::Zero();
+	const Point3 basePoint = node->position();
+	int armCount = 1;
+	for(DislocationNode* armNode = node->junctionRing; armNode != node; armNode = armNode->junctionRing){
+		assert(armNode->segment->replacedWith == nullptr);
+		assert(armNode->circuit->isDangling);
+		if(!armNode->circuit->isCompletelyBlocked){
 			node->dissolveJunction();
-			continue;
+			return;
 		}
+		armCount++;
+		centerOfMassVector += cell().wrapVector(armNode->position() - basePoint);
+	}
+	assert(armCount >= 2);
 
-		if(node->junctionRing == node) continue;
+	if(armCount >= 3){
+		formJunction(node, basePoint + centerOfMassVector / armCount);
+		return;
+	}
 
-		assert(node->segment->replacedWith == nullptr);
+	DislocationNode* node2 = node->junctionRing;
+	assert(node != node2);
+	assert(node2->junctionRing == node);
+	for(DislocationNode* end : {node, node2}){
+		end->circuit->isDangling = false;
+		end->circuit->numPreliminaryPoints = 0;
+	}
 
-		Vector3 centerOfMassVector = Vector3::Zero();
-		Point3 basePoint = node->position();
-		int armCount = 1;
-		bool allCircuitsCompletelyBlocked = true;
-		DislocationNode* armNode = node->junctionRing;
-		while(armNode != node){
-			assert(armNode->segment->replacedWith == nullptr);
-			assert(armNode->circuit->isDangling);
-			if(armNode->circuit->isCompletelyBlocked == false) {
-				allCircuitsCompletelyBlocked = false;
-				break;
-			}
-			armCount++;
-			centerOfMassVector += cell().wrapVector(armNode->position() - basePoint);
-			armNode = armNode->junctionRing;
-		}
+	if(node->oppositeNode == node2){
+		closeLoop(node, node2);
+	}else{
+		mergeSegments(node, node2);
+	}
+}
 
-		if(!allCircuitsCompletelyBlocked){
-			node->dissolveJunction();
-			continue;
-		}
+// Ends every arm's line at the arms' common center of mass.
+void BurgersLoopBuilder::formJunction(DislocationNode* node, const Point3& centerOfMass){
+	DislocationNode* armNode = node;
+	do{
+		armNode->circuit->isDangling = false;
+		assert(armNode != armNode->junctionRing);
 
-		assert(armCount >= 2);
+		DislocationSegment& segment = *armNode->segment;
+		const bool atForwardEnd = armNode->isForwardNode();
+		const Point3& end = armNode->position();
+		const int endCoreSize = atForwardEnd ? segment.coreSize.back() : segment.coreSize.front();
+		segment.addPoint(atForwardEnd, end + cell().wrapVector(centerOfMass - end), endCoreSize);
 
-		if(armCount >= 3){
-			Point3 centerOfMass = basePoint + centerOfMassVector / armCount;
+		armNode->circuit->numPreliminaryPoints = 0;
+		armNode = armNode->junctionRing;
+	}while(armNode != node);
+}
 
-			armNode = node;
-			do{
-				armNode->circuit->isDangling = false;
-				assert(armNode != armNode->junctionRing);
+// The two ends of one segment met. Unless they already coincide, the line gets a last point at the periodic image of
+// its first one nearest its end, which closes it.
+void BurgersLoopBuilder::closeLoop(DislocationNode* node1, DislocationNode* node2){
+	assert(node1->segment == node2->segment);
+	DislocationSegment* loop = node1->segment;
+	assert(loop->isClosedLoop());
 
-				DislocationSegment& segment = *armNode->segment;
-				const bool atForwardEnd = armNode->isForwardNode();
-				const Point3& end = armNode->position();
-				const int endCoreSize = atForwardEnd ? segment.coreSize.back() : segment.coreSize.front();
-				segment.addPoint(atForwardEnd, end + cell().wrapVector(centerOfMass - end), endCoreSize);
+	if(!cell().wrapVector(node1->position() - node2->position()).isZero(CA_ATOM_VECTOR_EPSILON)){
+		loop->addPoint(true, loop->line.back() + cell().wrapVector(loop->line.front() - loop->line.back()), loop->coreSize.back());
+		assert(cell().wrapVector(node1->position() - node2->position()).isZero(CA_ATOM_VECTOR_EPSILON));
+	}
 
-				armNode->circuit->numPreliminaryPoints = 0;
-				armNode = armNode->junctionRing;
-			}while(armNode != node);
-		}else{
-			DislocationNode* node1 = node;
-			DislocationNode* node2 = node->junctionRing;
-			assert(node1 != node2);
-			assert(node2->junctionRing == node1);
-			assert(node1->junctionRing == node2);
+	assert(loop->line.size() >= 3);
+}
 
-			BurgersCircuit* circuit1 = node1->circuit;
-			BurgersCircuit* circuit2 = node2->circuit;
-			circuit1->isDangling = false;
-			circuit2->isDangling = false;
-			circuit1->numPreliminaryPoints = 0;
-			circuit2->numPreliminaryPoints = 0;
+// Ends node1 and node2 of two segments met: moves segment2's line onto segment1's end at node1, shifted by the
+// periodic image vector between the two ends, and discards segment2.
+void BurgersLoopBuilder::mergeSegments(DislocationNode* node1, DislocationNode* node2){
+	assert(node1->segment != node2->segment);
 
-			if(node1->oppositeNode == node2){
-				assert(node1->segment == node2->segment);
-				DislocationSegment* loop = node1->segment;
-				assert(loop->isClosedLoop());
+	DislocationNode* farEnd1 = node1->oppositeNode;
+	DislocationNode* farEnd2 = node2->oppositeNode;
+	DislocationSegment* segment1 = node1->segment;
+	DislocationSegment* segment2 = node2->segment;
 
-				if(!cell().wrapVector(node1->position() - node2->position()).isZero(CA_ATOM_VECTOR_EPSILON)){
-					loop->addPoint(true, loop->line.back() + cell().wrapVector(loop->line.front() - loop->line.back()), loop->coreSize.back());
-					assert(cell().wrapVector(node1->position() - node2->position()).isZero(CA_ATOM_VECTOR_EPSILON));
-				}
+	// segment2's points and core sizes, from the one after node2's to farEnd2's
+	std::vector<Point3> points;
+	std::vector<int> coreSizes;
+	if(node2->isBackwardNode()){
+		points.assign(segment2->line.begin() + 1, segment2->line.end());
+		coreSizes.assign(segment2->coreSize.begin() + 1, segment2->coreSize.end());
+	}else{
+		points.assign(segment2->line.rbegin() + 1, segment2->line.rend());
+		coreSizes.assign(segment2->coreSize.rbegin() + 1, segment2->coreSize.rend());
+	}
 
-				assert(loop->line.size() >= 3);
-			}else{
-				assert(node1->segment != node2->segment);
-
-				DislocationNode* farEnd1 = node1->oppositeNode;
-				DislocationNode* farEnd2 = node2->oppositeNode;
-				DislocationSegment* segment1 = node1->segment;
-				DislocationSegment* segment2 = node2->segment;
-				if(node1->isBackwardNode()){
-					segment1->nodes[1] = farEnd2;
-					Vector3 shiftVector;
-					if(node2->isBackwardNode()){
-						shiftVector = calculateShiftVector(segment1->line.front(), segment2->line.front());
-						segment1->line.insert(segment1->line.begin(), segment2->line.rbegin(), segment2->line.rend() - 1);
-						segment1->coreSize.insert(segment1->coreSize.begin(), segment2->coreSize.rbegin(), segment2->coreSize.rend() - 1);
-					}else{
-						shiftVector = calculateShiftVector(segment1->line.front(), segment2->line.back());
-						segment1->line.insert(segment1->line.begin(), segment2->line.begin(), segment2->line.end() - 1);
-						segment1->coreSize.insert(segment1->coreSize.begin(), segment2->coreSize.begin(), segment2->coreSize.end() - 1);
-					}
-
-					if(shiftVector != Vector3::Zero()){
-						for(auto p = segment1->line.begin(); p != segment1->line.begin() + segment2->line.size() - 1; ++p){
-							*p -= shiftVector;
-						}
-					}
-				}else{
-					segment1->nodes[0] = farEnd2;
-					Vector3 shiftVector;
-					if(node2->isBackwardNode()){
-						shiftVector = calculateShiftVector(segment1->line.back(), segment2->line.front());
-						segment1->line.insert(segment1->line.end(), segment2->line.begin() + 1, segment2->line.end());
-						segment1->coreSize.insert(segment1->coreSize.end(), segment2->coreSize.begin() + 1, segment2->coreSize.end());
-					}else{
-						shiftVector = calculateShiftVector(segment1->line.back(), segment2->line.back());
-						segment1->line.insert(segment1->line.end(), segment2->line.rbegin() + 1, segment2->line.rend());
-						segment1->coreSize.insert(segment1->coreSize.end(), segment2->coreSize.rbegin() + 1, segment2->coreSize.rend());
-					}
-
-					if(shiftVector != Vector3::Zero()){
-						for(auto p = segment1->line.end() - segment2->line.size() + 1; p != segment1->line.end(); ++p){
-							*p -= shiftVector;
-						}
-					}
-				}
-				
-				farEnd2->segment = segment1;
-				farEnd2->oppositeNode = farEnd1;
-				farEnd1->oppositeNode = farEnd2;
-				node1->oppositeNode = node2;
-				node2->oppositeNode = node1;
-				segment2->replacedWith = segment1;
-				network().discardSegment(segment2);
-			}
+	const Vector3 shiftVector = calculateShiftVector(node1->position(), node2->position());
+	if(shiftVector != Vector3::Zero()){
+		for(Point3& point : points){
+			point -= shiftVector;
 		}
 	}
 
-	_danglingNodes.erase(std::remove_if(_danglingNodes.begin(), _danglingNodes.end(),[](DislocationNode* node){
-		return !node->isDangling();
-	}), _danglingNodes.end());
+	if(node1->isForwardNode()){
+		segment1->line.insert(segment1->line.end(), points.begin(), points.end());
+		segment1->coreSize.insert(segment1->coreSize.end(), coreSizes.begin(), coreSizes.end());
+		segment1->nodes[0] = farEnd2;
+	}else{
+		segment1->line.insert(segment1->line.begin(), points.rbegin(), points.rend());
+		segment1->coreSize.insert(segment1->coreSize.begin(), coreSizes.rbegin(), coreSizes.rend());
+		segment1->nodes[1] = farEnd2;
+	}
+
+	farEnd2->segment = segment1;
+	farEnd2->oppositeNode = farEnd1;
+	farEnd1->oppositeNode = farEnd2;
+	node1->oppositeNode = node2;
+	node2->oppositeNode = node1;
+	segment2->replacedWith = segment1;
+	network().discardSegment(segment2);
 }
 
 void BurgersLoopBuilder::createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength){
