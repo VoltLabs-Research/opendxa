@@ -36,44 +36,15 @@ public:
 			_pos = (f == next_around_edge(i, j)) ? start : tess._dt->cell_adjacent(start, f);
 		}
 
-		FacetCirculator& operator++(){
-            _pos = _tess._dt->cell_adjacent(_pos, next_around_edge(_tess._dt->index(_pos, _s), _tess._dt->index(_pos, _t)));
-            return *this;
-		}
-
-		FacetCirculator operator++(int){
-            auto tmp = *this;
-            ++(*this);
-            return tmp;
-        }
-
 		FacetCirculator& operator--(){
             _pos = _tess._dt->cell_adjacent(_pos,
                 next_around_edge(_tess._dt->index(_pos, _t), _tess._dt->index(_pos, _s)));
             return *this;
         }
 
-        FacetCirculator operator--(int){
-            auto tmp = *this;
-            --(*this);
-            return tmp;
-        }
-
 		[[nodiscard]] Facet operator*() const {
             return { _pos, next_around_edge(_tess._dt->index(_pos, _s), _tess._dt->index(_pos, _t)) };
         }
-
-        [[nodiscard]] Facet operator->() const {
-            return **this;
-        }
-
-		[[nodiscard]] bool operator==(const FacetCirculator& other) const {
-			return _pos == other._pos && _s == other._s && _t == other._t;
-		}
-
-		[[nodiscard]] bool operator!=(const FacetCirculator& other) const {
-			return !(*this == other);
-		}
 
 	private:
         const DelaunayTessellation& _tess;
@@ -94,14 +65,6 @@ public:
     void generateTessellation(const SimulationCell& simCell, const Point3* positions,
 		size_t numPoints, double ghostLayerSize, bool coverDomainWithFiniteTets, const int* selectedPoints = nullptr);
 
-    void releaseMemory() noexcept;
-
-    void setMaxDelaunayThreads(int threads){
-        _maxDelaunayThreads = threads;
-    }
-
-    static constexpr unsigned int kDefaultMaxDelaunayThreads = 16;
-	
     [[nodiscard]] size_type numberOfTetrahedra() const{
 		return _dt->nb_cells();
 	}
@@ -178,10 +141,6 @@ public:
         return FacetCirculator(*this, cell, i, j, start, f);
     }
 
-    [[nodiscard]] const SimulationCell& simCell() const{
-		return _simCell;
-	}
-	
     auto cells() const{
         return boost::make_iterator_range(begin_cells(), end_cells());
     }
@@ -205,9 +164,6 @@ private:
 
     size_type _primaryVertexCount = 0;
     size_type _numPrimaryTetrahedra = 0;
-    int _maxDelaunayThreads = 0;  
-
-    SimulationCell _simCell;
 };
 
 }

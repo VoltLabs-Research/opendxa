@@ -12,6 +12,12 @@
 
 namespace Volt{
 
+namespace{
+
+constexpr unsigned int kMaxDelaunayThreads = 16;
+
+}
+
 void DelaunayTessellation::generateTessellation(
 	const SimulationCell& simCell,
 	const Point3* positions,
@@ -29,8 +35,6 @@ void DelaunayTessellation::generateTessellation(
 
 	double lengthScale = (simCell.matrix().column(0) + simCell.matrix().column(1) + simCell.matrix().column(2)).length();
 	double epsilon = 1e-10 * lengthScale;
-
-	_simCell = simCell;
 
 	auto jitterFor = [epsilon](std::size_t atomIndex, unsigned axis) -> double {
 		std::uint64_t z = static_cast<std::uint64_t>(atomIndex) * 3ull + axis;
@@ -183,17 +187,12 @@ void DelaunayTessellation::generateTessellation(
 	const char* backend = "BDEL";
 	unsigned int delaunayThreads = 1;
 #ifdef VOLT_HAVE_PARALLEL_DELAUNAY
-	if(_maxDelaunayThreads != 1){
-		const unsigned int budget = static_cast<unsigned int>(std::max(1, Runtime::threadBudget()));
-		unsigned int threads = (_maxDelaunayThreads > 0)
-			? static_cast<unsigned int>(_maxDelaunayThreads)
-			: std::min(budget, kDefaultMaxDelaunayThreads);
-		threads = std::max(1u, std::min(threads, budget));
-		if(threads > 1){
-			GEO::Process::set_max_threads(threads);
-			backend = "PDEL";
-			delaunayThreads = threads;
-		}
+	const unsigned int budget = static_cast<unsigned int>(std::max(1, Runtime::threadBudget()));
+	const unsigned int threads = std::min(budget, kMaxDelaunayThreads);
+	if(threads > 1){
+		GEO::Process::set_max_threads(threads);
+		backend = "PDEL";
+		delaunayThreads = threads;
 	}
 #endif
 	_dt = GEO::Delaunay::create(3, backend);
@@ -280,15 +279,6 @@ std::optional<bool> DelaunayTessellation::alphaTest(CellHandle cell, double alph
 
     if(std::abs(denom) < 1e-9 && std::abs(nomin) < 1e-9) return std::nullopt;
     return (nomin / denom) < alpha;
-}
-
-void DelaunayTessellation::releaseMemory() noexcept{
-	_dt.reset();
-	std::vector<Point3>().swap(_pointData);
-	std::vector<CellInfo>().swap(_cellInfo);
-	std::vector<size_t>().swap(_particleIndices);
-	_primaryVertexCount = 0;
-	_numPrimaryTetrahedra = 0;
 }
 
 }
