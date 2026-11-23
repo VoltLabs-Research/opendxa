@@ -5,8 +5,7 @@
 #include <array>
 #include <numeric>
 #include <cassert>
-#include <set> 
-#include <boost/dynamic_bitset.hpp>
+#include <set>
 
 namespace Volt{
 
@@ -23,10 +22,6 @@ void InterfaceMesh::makeManifold(){
             visited_edges.insert(current_edge);
             current_edge = current_edge->oppositeEdge()->nextFaceEdge();
         }while(current_edge != start_edge);
-
-        if(visited_edges.size() == vertex->numEdges()){
-            continue;
-        }
 
         while(visited_edges.size() < vertex->numEdges()){
             Vertex* new_vertex = createVertex(vertex->pos());
@@ -107,6 +102,31 @@ void InterfaceMesh::createMesh(double maxNeighborDist, double alphaScale){
     makeManifold();
 }
 
+namespace{
+
+// Links the copy of an interface edge to the copy of the edge's opposite, when the opposite's face was kept too.
+void linkCopiedOpposite(
+    const InterfaceMeshTopology::Edge* edge,
+    InterfaceMeshTopology::Edge* copy,
+    const std::vector<InterfaceMeshTopology::Face*>& faceMap
+){
+    if(!edge->oppositeEdge() || copy->oppositeEdge()) return;
+
+    InterfaceMeshTopology::Face* oppositeCopy = faceMap[edge->oppositeEdge()->face()->index()];
+    if(!oppositeCopy) return;
+
+    InterfaceMeshTopology::Edge* candidate = oppositeCopy->edges();
+    do{
+        if(!candidate->oppositeEdge() && candidate->vertex1() == copy->vertex2() && candidate->vertex2() == copy->vertex1()){
+            copy->linkToOppositeEdge(candidate);
+            return;
+        }
+        candidate = candidate->nextFaceEdge();
+    }while(candidate != oppositeCopy->edges());
+}
+
+}
+
 bool InterfaceMesh::generateDefectMesh(
     BurgersLoopBuilder const& tracer,
     InterfaceMeshTopology& outMesh
@@ -114,15 +134,11 @@ bool InterfaceMesh::generateDefectMesh(
     std::vector<Vertex*> vertexMap(vertexCount(), nullptr);
     outMesh.reserveVertices(vertexCount());
     for(auto* v : vertices()){
-        auto* nv = outMesh.createVertex(v->pos());
-        if(v->index() >= 0 && static_cast<size_t>(v->index()) < vertexMap.size()){
-            vertexMap[v->index()] = nv;
-        }
+        vertexMap[v->index()] = outMesh.createVertex(v->pos());
     }
 
-    auto mapped = [&](Vertex* v) -> Vertex*{
-        const int idx = v ? v->index() : -1;
-        return (idx >= 0 && static_cast<size_t>(idx) < vertexMap.size()) ? vertexMap[idx] : nullptr;
+    auto mapped = [&](Vertex* v){
+        return vertexMap[v->index()];
     };
 
     std::vector<Face*> faceMap(faces().size(), nullptr);
@@ -133,68 +149,36 @@ bool InterfaceMesh::generateDefectMesh(
         if(!f->edges()) continue;
 
         auto* nf = outMesh.createFace();
-        if(f->index() >= 0 && static_cast<size_t>(f->index()) < faceMap.size()){
-            faceMap[f->index()] = nf;
-        }
+        faceMap[f->index()] = nf;
 
         auto* e = f->edges();
-        auto* start = e;
         do{
-            auto* v1 = mapped(e->vertex1());
-            auto* v2 = mapped(e->vertex2());
-            if(v1 && v2) outMesh.createEdge(v1, v2, nf);
+            outMesh.createEdge(mapped(e->vertex1()), mapped(e->vertex2()), nf);
             e = e->nextFaceEdge();
-        }while(e != start);
+        }while(e != f->edges());
     }
 
-    for(auto* of : faces()){
-        if(of->index() < 0 || static_cast<size_t>(of->index()) >= faceMap.size()) continue;
-        auto* nf = faceMap[of->index()];
-        if(!nf || !of->edges() || !nf->edges()) continue;
+    for(auto* f : faces()){
+        auto* nf = faceMap[f->index()];
+        if(!nf) continue;
 
-        auto* eo = of->edges();
-        auto* en = nf->edges();
-        auto* startO = eo;
+        auto* e = f->edges();
+        auto* ne = nf->edges();
         do{
-            auto* oppEo = eo->oppositeEdge();
-            if(oppEo && oppEo->face() && !en->oppositeEdge()){
-                const int oppIndex = oppEo->face()->index();
-                auto* oppNF = (oppIndex >= 0 && static_cast<size_t>(oppIndex) < faceMap.size())
-                    ? faceMap[oppIndex]
-                    : nullptr;
-                if(oppNF && oppNF->edges()){
-                    auto* ec = oppNF->edges();
-                    auto* startC = ec;
-                    do{
-                        if(!ec->oppositeEdge() && ec->vertex1() == en->vertex2() && ec->vertex2() == en->vertex1()){
-                            en->linkToOppositeEdge(ec);
-                            break;
-                        }
-
-                        ec = ec->nextFaceEdge();
-                    }while(ec != startC);
-                }
-            }
-
-            eo = eo->nextFaceEdge();
-            en = en->nextFaceEdge();
-        }while(eo != startO);
+            linkCopiedOpposite(e, ne, faceMap);
+            e = e->nextFaceEdge();
+            ne = ne->nextFaceEdge();
+        }while(e != f->edges());
     }
 
     for(auto* dn : tracer.danglingNodes()){
-        if(!dn) continue;
-        auto* c = dn->circuit;
-        if(!c || c->segmentMeshCap.size() < 2) continue;
-
-        if(!dn->segment || dn->segment->line.empty()) continue;
+        const BurgersCircuit* c = dn->circuit;
+        if(c->segmentMeshCap.size() < 2 || dn->segment->line.empty()) continue;
 
         auto* capV = outMesh.createVertex(dn->position());
-
         for(auto* me : c->segmentMeshCap){
-            if(!me) continue;
             auto* v1 = mapped(me->vertex2());
             auto* v2 = mapped(me->vertex1());
-            if(!v1 || !v2) continue;
 
             auto* nf = outMesh.createFace();
             outMesh.createEdge(v1, v2, nf);
