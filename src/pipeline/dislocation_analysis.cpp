@@ -336,7 +336,7 @@ void writeOutputs(const std::string& outputBase, const DislocationOutputs& outpu
     if(outputs.defectMesh){
         spdlog::info("Writing defect mesh data");
         DxaSerialization::streamMeshToFile(
-            outputBase + "_defect_mesh.parquet", results.defectMesh, results.structure, true
+            outputBase + "_defect_mesh.parquet", results.defectMesh, results.structure
         );
         results.defectMesh.clear();
     }
@@ -361,7 +361,6 @@ void writeOutputs(const std::string& outputBase, const DislocationOutputs& outpu
             outputBase + "_interface_mesh.parquet",
             results.interfaceMesh,
             results.structure,
-            true,
             DxaSerialization::InterfaceMeshFlags{
                 results.interfaceMesh.isCompletelyGood(),
                 results.interfaceMesh.isCompletelyBad()

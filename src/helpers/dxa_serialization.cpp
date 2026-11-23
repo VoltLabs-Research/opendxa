@@ -1,6 +1,7 @@
 #include <utility>
 #include <volt/helpers/dxa_serialization.h>
 #include <volt/helpers/burgers_circuit.h>
+#include <volt/helpers/edge_key.h>
 #include <volt/structures/crystal_structure_types.h>
 #include <cassert>
 #include <numeric>
@@ -767,106 +768,117 @@ void streamDislocationsToFile(
     JsonUtils::writeJsonToParquet(doc, summaryFilePath);
 }
 
+namespace {
+
+// How far a corner may move when its face is unwrapped and still count as the same vertex.
+constexpr double kUnwrapTolerance = 1e-6;
+
+struct UnwrappedMesh{
+    std::vector<Point3> points;
+    std::vector<std::array<int, 3>> faces;
+};
+
+// A face that straddles a periodic boundary is unwrapped, and each corner that moves gets a vertex of its own, so
+// that every face can be drawn as one triangle. Vertex i of the mesh stays point i.
+UnwrappedMesh unwrapFaces(const InterfaceMeshTopology& mesh, const SimulationCell& cell){
+    const auto& vertices = mesh.vertices();
+    UnwrappedMesh unwrapped;
+    unwrapped.points.reserve(vertices.size());
+    for(const auto* vertex : vertices){
+        unwrapped.points.push_back(vertex->pos());
+    }
+
+    unwrapped.faces.reserve(mesh.faces().size());
+    for(const auto* face : mesh.faces()){
+        if(!face || !face->edges()) continue;
+        std::array<int, 3> corners{};
+        std::array<Point3, 3> positions{};
+        auto* edge = face->edges();
+        for(int i = 0; i < 3; ++i, edge = edge->nextFaceEdge()){
+            corners[i] = edge->vertex1()->index();
+            positions[i] = edge->vertex1()->pos();
+        }
+
+        cell.unwrapPositions(positions.data(), 3);
+
+        for(int i = 0; i < 3; ++i){
+            if(vertices[corners[i]]->pos().equals(positions[i], kUnwrapTolerance)) continue;
+            corners[i] = static_cast<int>(unwrapped.points.size());
+            unwrapped.points.push_back(positions[i]);
+        }
+        unwrapped.faces.push_back(corners);
+    }
+    return unwrapped;
+}
+
+std::string withoutParquetExtension(const std::string& filePath){
+    constexpr std::string_view extension = ".parquet";
+    return filePath.ends_with(extension) ? filePath.substr(0, filePath.size() - extension.size()) : filePath;
+}
+
+json columnJson(const AffineTransformation& matrix, int column){
+    return {matrix.column(column).x(), matrix.column(column).y(), matrix.column(column).z()};
+}
+
+json cellJson(const SimulationCell& cell){
+    const auto& matrix = cell.matrix();
+    const auto& pbc = cell.pbcFlags();
+    return {
+        {"matrix", {columnJson(matrix, 0), columnJson(matrix, 1), columnJson(matrix, 2)}},
+        {"origin", columnJson(matrix, 3)},
+        {"pbc", {pbc[0], pbc[1], pbc[2]}}
+    };
+}
+
+// V - E + F of the mesh as it is, counting each undirected edge once.
+std::int64_t eulerCharacteristic(const InterfaceMeshTopology& mesh){
+    std::unordered_set<uint64_t> edges;
+    edges.reserve(mesh.faces().size() * 3);
+    for(const auto* face : mesh.faces()){
+        if(!face || !face->edges()) continue;
+        auto* edge = face->edges();
+        do{
+            edges.insert(packEdgeKey(edge->vertex1()->index(), edge->vertex2()->index()));
+            edge = edge->nextFaceEdge();
+        }while(edge != face->edges());
+    }
+    return static_cast<int64_t>(mesh.vertices().size())
+        - static_cast<int64_t>(edges.size())
+        + static_cast<int64_t>(mesh.faces().size());
+}
+
+}
+
 void streamMeshToFile(
     const std::string& filePath,
     const InterfaceMeshTopology& mesh,
     const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
     const std::optional<InterfaceMeshFlags>& interfaceFlags
 ){
-    const auto& originalVertices = mesh.vertices();
-    const auto& originalFaces = mesh.faces();
-    const auto& cell = structureAnalysis.context().simCell;
+    const SimulationCell& cell = structureAnalysis.context().simCell;
+    const UnwrappedMesh unwrapped = unwrapFaces(mesh, cell);
 
-    std::vector<Point3> exportPoints;
-    exportPoints.reserve(originalVertices.size());
-    std::vector<int> originalToExportMap(originalVertices.size());
-    for(size_t i = 0; i < originalVertices.size(); ++i){
-        exportPoints.push_back(originalVertices[i]->pos());
-        originalToExportMap[i] = static_cast<int>(i);
-    }
-
-    std::vector<std::array<int, 3>> exportFaces;
-    exportFaces.reserve(originalFaces.size());
-    for(const auto* face : originalFaces){
-        if(!face || !face->edges()) continue;
-        std::array<int, 3> faceVerts{};
-        std::array<Point3, 3> facePos{};
-        auto* edge = face->edges();
-        for(int i = 0; i < 3; ++i, edge = edge->nextFaceEdge()){
-            faceVerts[i] = edge->vertex1()->index();
-            facePos[i] = edge->vertex1()->pos();
-        }
-
-        cell.unwrapPositions(facePos.data(), 3);
-
-        std::array<int, 3> newFaceVerts{};
-        for(int i = 0; i < 3; ++i){
-            const Point3& orig = originalVertices[faceVerts[i]]->pos();
-            if(!orig.equals(facePos[i], 1e-6)){
-                newFaceVerts[i] = static_cast<int>(exportPoints.size());
-                exportPoints.push_back(facePos[i]);
-            }else{
-                newFaceVerts[i] = originalToExportMap[faceVerts[i]];
-            }
-        }
-        exportFaces.push_back(newFaceVerts);
-    }
-
-    const std::string basePath = filePath.size() >= 8
-        && filePath.compare(filePath.size() - 8, 8, ".parquet") == 0
-        ? filePath.substr(0, filePath.size() - 8)
-        : filePath;
+    const std::string basePath = withoutParquetExtension(filePath);
     const std::string verticesPath = basePath + ".vertices.parquet";
     const std::string facetsPath = basePath + ".facets.parquet";
-
-    streamMeshTablesToParquet(verticesPath, facetsPath, exportPoints, exportFaces);
-
-    const std::string verticesName = std::filesystem::path(verticesPath).filename().string();
-    const std::string facetsName = std::filesystem::path(facetsPath).filename().string();
+    streamMeshTablesToParquet(verticesPath, facetsPath, unwrapped.points, unwrapped.faces);
 
     json doc;
     doc["main_listing"] = {
-        {"total_nodes", static_cast<int64_t>(exportPoints.size())},
-        {"total_facets", static_cast<int64_t>(exportFaces.size())}
+        {"total_nodes", static_cast<int64_t>(unwrapped.points.size())},
+        {"total_facets", static_cast<int64_t>(unwrapped.faces.size())}
     };
-
-    const auto& cellMatrix = cell.matrix();
-    const auto& cellPbc = cell.pbcFlags();
     doc["export"]["MeshExporter"][kParquetSourceKey] = {
-        {"vertices", verticesName},
-        {"facets", facetsName},
-        {"cell", {
-            {"matrix", {
-                {cellMatrix.column(0).x(), cellMatrix.column(0).y(), cellMatrix.column(0).z()},
-                {cellMatrix.column(1).x(), cellMatrix.column(1).y(), cellMatrix.column(1).z()},
-                {cellMatrix.column(2).x(), cellMatrix.column(2).y(), cellMatrix.column(2).z()}
-            }},
-            {"origin", {cellMatrix.column(3).x(), cellMatrix.column(3).y(), cellMatrix.column(3).z()}},
-            {"pbc", {cellPbc[0], cellPbc[1], cellPbc[2]}}
-        }}
+        {"vertices", std::filesystem::path(verticesPath).filename().string()},
+        {"facets", std::filesystem::path(facetsPath).filename().string()},
+        {"cell", cellJson(cell)}
     };
-
-    if(includeTopologyInfo){
-        std::unordered_set<uint64_t> edgeSet;
-        edgeSet.reserve(originalFaces.size() * 3);
-        for(const auto* face : originalFaces){
-            if(!face || !face->edges()) continue;
-            auto* edge = face->edges();
-            do{
-                int v1 = edge->vertex1()->index(), v2 = edge->vertex2()->index();
-                if(v1 > v2) std::swap(v1, v2);
-                edgeSet.insert((static_cast<uint64_t>(static_cast<uint32_t>(v1)) << 32) | static_cast<uint32_t>(v2));
-                edge = edge->nextFaceEdge();
-            }while(edge != face->edges());
-        }
-        doc["topology"] = {
-            {"euler_characteristic", static_cast<int64_t>(originalVertices.size()) - static_cast<int64_t>(edgeSet.size()) + static_cast<int64_t>(originalFaces.size())}
-        };
-        if(interfaceFlags){
-            doc["topology"]["is_completely_good"] = interfaceFlags->isCompletelyGood;
-            doc["topology"]["is_completely_bad"] = interfaceFlags->isCompletelyBad;
-        }
+    doc["topology"] = {
+        {"euler_characteristic", eulerCharacteristic(mesh)}
+    };
+    if(interfaceFlags){
+        doc["topology"]["is_completely_good"] = interfaceFlags->isCompletelyGood;
+        doc["topology"]["is_completely_bad"] = interfaceFlags->isCompletelyBad;
     }
 
     JsonUtils::writeJsonToParquet(doc, filePath);

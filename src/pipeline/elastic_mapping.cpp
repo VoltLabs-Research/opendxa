@@ -3,6 +3,7 @@
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/helpers/crystal_path_finder.h>
 #include <volt/pipeline/elastic_mapping.h>
+#include <volt/helpers/edge_key.h>
 #include <tbb/parallel_for.h>
 #include <tbb/parallel_sort.h>
 #include <mutex>
@@ -53,11 +54,7 @@ void ElasticMapping::generateTessellationEdges(){
 
                 if(simCell.isWrappedVector(vertexPositions[vi] - vertexPositions[vj])) continue;
 
-                int minV = std::min(v1, v2);
-                int maxV = std::max(v1, v2);
-                const uint64_t key = (uint64_t{static_cast<uint32_t>(minV)} << 32) |
-                                     uint64_t{static_cast<uint32_t>(maxV)};
-                edgeKeys.push_back(key);
+                edgeKeys.push_back(packEdgeKey(v1, v2));
             }
         }
 
@@ -98,8 +95,7 @@ void ElasticMapping::generateTessellationEdges(){
     _edges.reserve(allKeys.size());
     _edgeCount = 0;
     for(uint64_t key : allKeys){
-        const int v1 = static_cast<int>(key >> 32);
-        const int v2 = static_cast<int>(key & 0xFFFFFFFFu);
+        const auto [v1, v2] = unpackEdgeKey(key);
         const int edgeIndex = static_cast<int>(_edges.size());
         _edges.emplace_back(v1, v2);
         auto& edge = _edges.back();

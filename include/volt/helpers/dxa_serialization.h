@@ -51,7 +51,6 @@ void streamMeshToFile(
     const std::string& filePath,
     const InterfaceMeshTopology& mesh,
     const StructureAnalysis& structureAnalysis,
-    bool includeTopologyInfo,
     const std::optional<InterfaceMeshFlags>& interfaceFlags = std::nullopt
 );
 
