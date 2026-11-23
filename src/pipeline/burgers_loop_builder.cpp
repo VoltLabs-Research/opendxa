@@ -49,7 +49,7 @@ void BurgersLoopBuilder::traceDislocationSegments(){
 
         if(!dangling.empty()){
             for(auto* node : dangling){
-                traceSegment(*node->segment, *node, L, L <= _maxBurgersCircuitSize);
+                traceSegment(*node, L, L <= _maxBurgersCircuitSize);
             }
         }
 
@@ -416,8 +416,8 @@ void BurgersLoopBuilder::createAndTraceSegment(const ClusterVector& burgersVecto
 
 	appendLinePoint(segment->forwardNode());
 
-	traceSegment(*segment, segment->forwardNode(), maxCircuitLength, true);
-	traceSegment(*segment, segment->backwardNode(), maxCircuitLength, true);
+	traceSegment(segment->forwardNode(), maxCircuitLength, true);
+	traceSegment(segment->backwardNode(), maxCircuitLength, true);
 }
 
 BurgersCircuit* BurgersLoopBuilder::buildReverseCircuit(BurgersCircuit* forwardCircuit){
@@ -495,85 +495,72 @@ BurgersCircuit* BurgersLoopBuilder::buildReverseCircuit(BurgersCircuit* forwardC
 	return backwardCircuit;
 }
 
-void BurgersLoopBuilder::traceSegment(DislocationSegment& segment, DislocationNode& node, int maxCircuitLength, bool markSwept){
-    BurgersCircuit& circuit = *node.circuit;
+// Sweeps the circuit forward until it stops moving, then lengthens it by one edge and sweeps again, until it is
+// maxCircuitLength edges long or cannot be lengthened. Every move appends a point to the node's line.
+void BurgersLoopBuilder::traceSegment(DislocationNode& node, int maxCircuitLength, bool markSwept){
+    const BurgersCircuit& circuit = *node.circuit;
     assert(circuit.countEdges() == circuit.edgeCount);
     assert(circuit.isDangling);
 
-    for(;;){
-        size_t idx = _edgeStartIndex++;
-        int edgeIndex = (idx % circuit.edgeCount);
+    do{
+        sweepCircuit(node, markSwept);
+    }while(circuit.edgeCount < maxCircuitLength && lengthenCircuit(node, markSwept));
+}
 
-        InterfaceMesh::Edge* firstEdge = circuit.getEdge(edgeIndex);
+// Each lap starts at a different edge, cycling through the edges of every circuit traced so far.
+InterfaceMesh::Edge* BurgersLoopBuilder::nextStartEdge(const BurgersCircuit& circuit){
+    return circuit.getEdge(_edgeStartIndex++ % circuit.edgeCount);
+}
 
-        InterfaceMesh::Edge* edge0 = firstEdge;
-        InterfaceMesh::Edge* edge1 = edge0->nextCircuitEdge;
-        InterfaceMesh::Edge* edge2 = edge1->nextCircuitEdge;
-        assert(edge1->circuit == &circuit);
-        int counter = 0;
-        do{
-            assert(circuit.edgeCount >= 3);
-            
-            ClusterVector burgersVec = circuit.calculateBurgersVector();
-            if(burgersVec.localVec().isZero(CA_LATTICE_VECTOR_EPSILON)) {
-                std::cerr << "Warning: Burgers vector is zero for circuit with " << circuit.edgeCount 
-                         << " edges. Attempting to continue..." << std::endl;
-                if(circuit.edgeCount <= 3) {
-                    std::cerr << "Error: Cannot recover circuit with only " << circuit.edgeCount << " edges" << std::endl;
-                    return;
-                }
-            }
-            
-            assert(circuit.countEdges() == circuit.edgeCount);
-            assert(edge0->circuit == &circuit && edge1->circuit == &circuit && edge2->circuit == &circuit);
-
-            bool wasShortened = false;
-            if(tryRemoveTwoCircuitEdges(edge0, edge1, edge2)){
-                wasShortened = true;
-			}else if(tryRemoveThreeCircuitEdges(edge0, edge1, edge2, markSwept)){
-                wasShortened = true;
-			}else if(tryRemoveOneCircuitEdge(edge0, edge1, edge2, markSwept)){
-                wasShortened = true;
-			}else if(trySweepTwoFacets(edge0, edge1, edge2, markSwept)){
-                wasShortened = true;
-			}
-
-            if(wasShortened){
-                appendLinePoint(node);
-                counter = -1;
-            }
-
-            edge0 = edge1;
-            edge1 = edge2;
-            edge2 = edge2->nextCircuitEdge;
-            counter++;
-        }while(counter <= circuit.edgeCount);
+// Laps the circuit, moving it wherever one of the sweep moves applies, until a full lap makes no move.
+void BurgersLoopBuilder::sweepCircuit(DislocationNode& node, bool markSwept){
+    BurgersCircuit& circuit = *node.circuit;
+    InterfaceMesh::Edge* edge0 = nextStartEdge(circuit);
+    InterfaceMesh::Edge* edge1 = edge0->nextCircuitEdge;
+    InterfaceMesh::Edge* edge2 = edge1->nextCircuitEdge;
+    assert(edge1->circuit == &circuit);
+    int counter = 0;
+    do{
         assert(circuit.edgeCount >= 3);
+        // The moves keep the Burgers vector, and both circuit creators reject a zero one.
+        assert(!circuit.calculateBurgersVector().localVec().isZero(CA_LATTICE_VECTOR_EPSILON));
         assert(circuit.countEdges() == circuit.edgeCount);
+        assert(edge0->circuit == &circuit && edge1->circuit == &circuit && edge2->circuit == &circuit);
 
-        if(circuit.edgeCount >= maxCircuitLength) break;
+        const bool moved = tryRemoveTwoCircuitEdges(edge0, edge1, edge2)
+            || tryRemoveThreeCircuitEdges(edge0, edge1, edge2, markSwept)
+            || tryRemoveOneCircuitEdge(edge0, edge1, edge2, markSwept)
+            || trySweepTwoFacets(edge0, edge1, edge2, markSwept);
+        if(moved){
+            appendLinePoint(node);
+            counter = -1;
+        }
 
-        bool wasExtended = false;
+        edge0 = edge1;
+        edge1 = edge2;
+        edge2 = edge2->nextCircuitEdge;
+        counter++;
+    }while(counter <= circuit.edgeCount);
+    assert(circuit.edgeCount >= 3);
+    assert(circuit.countEdges() == circuit.edgeCount);
+}
 
-        idx = _edgeStartIndex++;
-        edgeIndex = (idx % circuit.edgeCount);
+// Lengthens the circuit by one edge over the first facet ahead of it that allows that.
+bool BurgersLoopBuilder::lengthenCircuit(DislocationNode& node, bool markSwept){
+    BurgersCircuit& circuit = *node.circuit;
+    InterfaceMesh::Edge* firstEdge = nextStartEdge(circuit);
+    InterfaceMesh::Edge* edge0 = firstEdge;
+    InterfaceMesh::Edge* edge1 = firstEdge->nextCircuitEdge;
+    do{
+        if(tryInsertOneCircuitEdge(edge0, edge1, markSwept)){
+            appendLinePoint(node);
+            return true;
+        }
 
-        firstEdge = circuit.getEdge(edgeIndex);
-
-        edge0 = firstEdge;
-        edge1 = firstEdge->nextCircuitEdge;
-        do{
-            if(tryInsertOneCircuitEdge(edge0, edge1, markSwept)){
-                wasExtended = true;
-                appendLinePoint(node);
-                break;
-            }
-
-            edge0 = edge1;
-            edge1 = edge1->nextCircuitEdge;
-        }while(edge0 != firstEdge);
-        if(!wasExtended) break;
-    }
+        edge0 = edge1;
+        edge1 = edge1->nextCircuitEdge;
+    }while(edge0 != firstEdge);
+    return false;
 }
 
 bool BurgersLoopBuilder::tryRemoveTwoCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2){

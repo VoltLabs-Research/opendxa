@@ -79,7 +79,10 @@ private:
 
 	void discardCircuit(BurgersCircuit* circuit);
 	void createAndTraceSegment(const ClusterVector& burgersVector, BurgersCircuit* forwardCircuit, int maxCircuitLength);
-	void traceSegment(DislocationSegment& segment, DislocationNode& node, int maxCircuitLength, bool markSwept);
+	void traceSegment(DislocationNode& node, int maxCircuitLength, bool markSwept);
+	InterfaceMesh::Edge* nextStartEdge(const BurgersCircuit& circuit);
+	void sweepCircuit(DislocationNode& node, bool markSwept);
+	bool lengthenCircuit(DislocationNode& node, bool markSwept);
 	void appendLinePoint(DislocationNode& node);
 	void markCoreCells(DislocationNode& node, const Point3& center);
 	void createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength);
