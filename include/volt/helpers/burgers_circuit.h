@@ -29,6 +29,10 @@ struct BurgersCircuit{
 
     bool isDangling = true;
 
+	// Bound the walks around the edge ring below, so that a ring a bug left open or tangled cannot hang them.
+	static constexpr std::size_t kRingWalkSlack = 100;
+	static constexpr std::size_t kMaxCountedEdges = 10000;
+
 	BurgersCircuit() noexcept = default;
 
 	[[nodiscard]]
@@ -47,10 +51,10 @@ struct BurgersCircuit{
 			}
 
 			edge = edge->nextCircuitEdge;
-            if(++safety_counter > edgeCount + 100) break; 
+            if(++safety_counter > edgeCount + kRingWalkSlack) break;
 		}while(edge != nullptr && edge != firstEdge);
 
-        if(!firstEdge || !firstEdge->clusterTransition) return ClusterVector(b, nullptr);
+        if(!firstEdge->clusterTransition) return ClusterVector(b, nullptr);
 		return ClusterVector(b, firstEdge->clusterTransition->cluster1);
 	}
 
@@ -66,7 +70,7 @@ struct BurgersCircuit{
 			center += current;
 			current += edge->physicalVector;
 			edge = edge->nextCircuitEdge;
-            if(++safety_counter > edgeCount + 100) break;
+            if(++safety_counter > edgeCount + kRingWalkSlack) break;
 		}while(edge != nullptr && edge != firstEdge);
 
 		return firstEdge->vertex1()->pos() + (center / static_cast<double>(edgeCount));
@@ -80,7 +84,7 @@ struct BurgersCircuit{
 		do{
 			++cnt;
 			edge = edge->nextCircuitEdge;
-            if(cnt > 10000) break;
+            if(cnt > kMaxCountedEdges) break;
 		}while(edge != nullptr && edge != firstEdge);
 		return cnt;
 	}
