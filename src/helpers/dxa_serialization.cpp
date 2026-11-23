@@ -4,7 +4,6 @@
 #include <volt/structures/crystal_structure_types.h>
 #include <cassert>
 #include <cstdio>
-#include <functional>
 #include <numeric>
 #include <unordered_set>
 #include <unordered_map>
@@ -155,37 +154,37 @@ json getCircuitInformation(const DislocationNetwork* network);
 int countJunctions(const DislocationNetwork* network);
 int countDanglingSegments(const DislocationNetwork* network);
 
-void clipDislocationLine(
-    const std::vector<Point3>& line,
-    const SimulationCell& simulationCell,
-    const std::function<void(const Point3&, const Point3&, bool)>& segmentCallback
-){
-    if(line.size() < 2) return;
-    bool isInitialSegment = true;
+// Past this many periodic crossings within one segment, the rest of it is kept as it is.
+constexpr int kMaxCrossingsPerSegment = 10;
+constexpr double kCrossingEpsilon = 1e-9;
 
-    auto v1Iter = line.cbegin();
-    Point3 rp1 = simulationCell.absoluteToReduced(*v1Iter);
+std::vector<std::vector<Point3>> splitAtPeriodicBoundaries(const std::vector<Point3>& line, const SimulationCell& cell){
+    std::vector<std::vector<Point3>> pieces;
+    if(line.size() < 2) return pieces;
+
+    // Works in reduced coordinates, with the line shifted so that it starts inside the cell. Each crossing of a
+    // periodic face ends the current piece and wraps the rest of the line back by one cell.
+    bool startsPiece = true;
+    auto addSegment = [&](const Point3& reducedFrom, const Point3& reducedTo){
+        if(startsPiece) pieces.push_back({cell.reducedToAbsolute(reducedFrom)});
+        pieces.back().push_back(cell.reducedToAbsolute(reducedTo));
+    };
+
+    Point3 rp1 = cell.absoluteToReduced(line.front());
     Vector3 shiftVector = Vector3::Zero();
     for(size_t dimension = 0; dimension < 3; dimension++){
-        if(simulationCell.pbcFlags()[dimension]){
+        if(cell.pbcFlags()[dimension]){
             double shift = -std::floor(rp1[dimension]);
             rp1[dimension] += shift;
             shiftVector[dimension] += shift;
         }
     }
 
-    for(auto v2Iter = v1Iter + 1; v2Iter != line.cend(); v1Iter = v2Iter, ++v2Iter){
-        Point3 rp2 = simulationCell.absoluteToReduced(*v2Iter) + shiftVector;
-        int maxIterations = 10;
-        int iterationCount = 0;
-        do{
-            iterationCount++;
-            if(iterationCount > maxIterations){
-                segmentCallback(
-                    simulationCell.reducedToAbsolute(rp1),
-                    simulationCell.reducedToAbsolute(rp2),
-                    isInitialSegment
-                );
+    for(size_t i = 1; i < line.size(); ++i){
+        Point3 rp2 = cell.absoluteToReduced(line[i]) + shiftVector;
+        for(int crossings = 0; ; ++crossings){
+            if(crossings == kMaxCrossingsPerSegment){
+                addSegment(rp1, rp2);
                 break;
             }
 
@@ -193,40 +192,40 @@ void clipDislocationLine(
             double crossDir = 0;
             double smallestT = std::numeric_limits<double>::max();
             for(size_t dimension = 0; dimension < 3; dimension++){
-                if(simulationCell.pbcFlags()[dimension]){
-                    int d = (int) std::floor(rp2[dimension]) - (int) std::floor(rp1[dimension]);
-                    if(d == 0) continue;
+                if(!cell.pbcFlags()[dimension]) continue;
+                int d = (int) std::floor(rp2[dimension]) - (int) std::floor(rp1[dimension]);
+                if(d == 0) continue;
 
-                    double dr = rp2[dimension] - rp1[dimension];
-                    if(std::abs(dr) < 1e-9) continue;
+                double dr = rp2[dimension] - rp1[dimension];
+                if(std::abs(dr) < kCrossingEpsilon) continue;
 
-                    double t = (d > 0) ? (std::ceil(rp1[dimension]) - rp1[dimension]) / dr
-                                       : (std::floor(rp1[dimension]) - rp1[dimension]) / dr;
-                    if(t > 1e-9 && t < smallestT){
-                        smallestT = t;
-                        crossDim = dimension;
-                        crossDir = (d > 0) ? 1.0 : -1.0;
-                    }
+                double t = (d > 0) ? (std::ceil(rp1[dimension]) - rp1[dimension]) / dr
+                                   : (std::floor(rp1[dimension]) - rp1[dimension]) / dr;
+                if(t > kCrossingEpsilon && t < smallestT){
+                    smallestT = t;
+                    crossDim = dimension;
+                    crossDir = (d > 0) ? 1.0 : -1.0;
                 }
             }
 
-            if(smallestT < (1.0 - 1e-9)){
+            if(smallestT < (1.0 - kCrossingEpsilon)){
                 Point3 intersection = rp1 + smallestT * (rp2 - rp1);
                 intersection[crossDim] = std::round(intersection[crossDim]);
-                segmentCallback(simulationCell.reducedToAbsolute(rp1), simulationCell.reducedToAbsolute(intersection), isInitialSegment);
+                addSegment(rp1, intersection);
+                startsPiece = true;
                 shiftVector[crossDim] -= crossDir;
                 rp1 = intersection;
                 rp1[crossDim] -= crossDir;
                 rp2[crossDim] -= crossDir;
-                isInitialSegment = true;
             }else{
-                segmentCallback(simulationCell.reducedToAbsolute(rp1), simulationCell.reducedToAbsolute(rp2), isInitialSegment);
-                isInitialSegment = false;
+                addSegment(rp1, rp2);
+                startsPiece = false;
                 break;
             }
-        }while(true);
+        }
         rp1 = rp2;
     }
+    return pieces;
 }
 
 void streamDelaunayTessellationToFile(
@@ -630,17 +629,9 @@ void streamDislocationsToFile(
         };
 
         if(simulationCell && options.clipPbcSegments){
-            std::vector<Point3> currentChunk;
-            clipDislocationLine(segment->line, *simulationCell,
-                [&](const Point3& p1, const Point3& p2, bool isInitial){
-                    if(isInitial && !currentChunk.empty()){
-                        emitChunk(currentChunk);
-                        currentChunk.clear();
-                    }
-                    if(currentChunk.empty()) currentChunk.push_back(p1);
-                    currentChunk.push_back(p2);
-                });
-            if(!currentChunk.empty()) emitChunk(currentChunk);
+            for(const auto& piece : splitAtPeriodicBoundaries(segment->line, *simulationCell)){
+                emitChunk(piece);
+            }
         }else{
             if(!segment->line.empty())
                 emitChunk(std::vector<Point3>(segment->line.begin(), segment->line.end()));

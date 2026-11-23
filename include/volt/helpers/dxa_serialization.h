@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <optional>
+#include <vector>
 
 #include <volt/helpers/dislocation_network.h>
 #include <volt/pipeline/delaunay_tessellation.h>
@@ -26,6 +27,11 @@ struct BurgersFamily{
     std::string label;
 };
 BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure);
+
+// Splits a dislocation line where it crosses a periodic face of the cell, shifting the pieces by whole cell vectors
+// so that the line stays inside the cell along its periodic directions: where one piece leaves through a face, the
+// next one starts on the opposite face.
+std::vector<std::vector<Point3>> splitAtPeriodicBoundaries(const std::vector<Point3>& line, const SimulationCell& cell);
 
 void streamDislocationsToFile(
     const std::string& linesFilePath,
