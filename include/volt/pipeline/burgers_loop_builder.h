@@ -29,9 +29,8 @@ public:
 		bool claimedWhileCapStored = false;
 	};
 
-	BurgersLoopBuilder(InterfaceMesh& mesh, ClusterGraph* clusterGraph, int maxTrialCircuitSize, int maxCircuitElongation) :
+	BurgersLoopBuilder(InterfaceMesh& mesh, int maxTrialCircuitSize, int maxCircuitElongation) :
 		_mesh(mesh),
-		_network(new DislocationNetwork(clusterGraph)),
 		_unusedCircuit(nullptr),
 		_maxBurgersCircuitSize(maxTrialCircuitSize),
 		_maxExtendedBurgersCircuitSize(maxTrialCircuitSize + maxCircuitElongation){}
@@ -41,11 +40,11 @@ public:
 	}
 
 	DislocationNetwork& network(){
-		return *_network;
+		return _network;
 	}
 
 	const DislocationNetwork& network() const{
-		return *_network;
+		return _network;
 	}
 
 	const SimulationCell& cell() const{
@@ -105,7 +104,7 @@ private:
 	}
 
 	InterfaceMesh& _mesh;
-	std::shared_ptr<DislocationNetwork> _network;
+	DislocationNetwork _network;
 	tbb::spin_mutex _circuit_pool_mutex;
 
 	int _maxBurgersCircuitSize;

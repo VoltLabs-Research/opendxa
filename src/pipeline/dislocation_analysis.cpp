@@ -495,7 +495,6 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
     steps.next("Tracing Burgers circuits");
     BurgersLoopBuilder tracer(
         interfaceMesh,
-        &structure.clusterGraph(),
         static_cast<int>(_maxTrialCircuitSize),
         static_cast<int>(_circuitStretchability)
     );

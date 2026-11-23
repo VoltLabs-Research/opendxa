@@ -6,7 +6,6 @@
 #include <volt/helpers/burgers_circuit.h>
 #include <volt/helpers/cluster_vector.h>
 #include <tbb/spin_mutex.h>
-#include <memory>
 #include <vector>
 #include <algorithm>
 #include <ranges>
@@ -151,15 +150,6 @@ inline const Point3& DislocationNode::position() const{
 
 class DislocationNetwork{
 public:
-	DislocationNetwork(ClusterGraph* clusterGraph)
-		: _clusterGraph(std::shared_ptr<ClusterGraph>(clusterGraph, [](ClusterGraph*){})){}
-
-	DislocationNetwork(const DislocationNetwork &other);
-
-	[[nodiscard]] const ClusterGraph &clusterGraph() const{
-		return *_clusterGraph;
-	}
-
 	[[nodiscard]] const std::vector<DislocationSegment*>& segments() const{
 		return _segments;
 	}
@@ -180,7 +170,6 @@ public:
 	void discardSegment(DislocationSegment* segment);
 
 private:
-	std::shared_ptr<ClusterGraph> _clusterGraph;
 	MemoryPool<DislocationNode> _nodePool;
 	std::vector<DislocationSegment*> _segments;
 	MemoryPool<DislocationSegment> _segmentPool;

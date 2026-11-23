@@ -6,36 +6,6 @@
 
 namespace Volt{
 
-DislocationNetwork::DislocationNetwork(const DislocationNetwork& other): _clusterGraph(other._clusterGraph){
-	_segments.reserve(other._segments.size());
-
-	for(const auto *oldSegment : other.segments()){
-		assert(oldSegment->replacedWith == nullptr);
-		assert(oldSegment->id == static_cast<int>(_segments.size()));
-
-		auto* newSegment = createSegment(oldSegment->burgersVector);
-		newSegment->line = oldSegment->line;
-		newSegment->coreSize = oldSegment->coreSize;
-
-		assert(newSegment->id == oldSegment->id);
-	}
-
-	for(size_t segmentIndex = 0; segmentIndex < other.segments().size(); ++segmentIndex){
-		const auto *oldSegment = other.segments()[segmentIndex];
-		auto *newSegment = _segments[segmentIndex];
-
-		for(int nodeIndex = 0; nodeIndex < 2; ++nodeIndex){
-			const auto *oldNode = oldSegment->nodes[nodeIndex];
-			if(oldNode->isDangling()) continue;
-
-			auto *oldSecondNode = oldNode->junctionRing;
-			auto *newNode = newSegment->nodes[nodeIndex];
-			auto *newSecondNode= _segments[oldSecondNode->segment->id]->nodes[oldSecondNode->isForwardNode() ? 0 : 1];
-			newNode->junctionRing = newSecondNode;
-		}
-	}
-}
-
 DislocationSegment* DislocationNetwork::createSegment(const ClusterVector& burgersVector){
 	tbb::spin_mutex::scoped_lock lock(_segmentsMutex);
 	DislocationNode *forwardNode = _nodePool.construct();
