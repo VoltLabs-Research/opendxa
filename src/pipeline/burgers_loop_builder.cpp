@@ -83,17 +83,8 @@ void BurgersLoopBuilder::finishDislocationSegments(std::string_view referenceTop
         [&](const tbb::blocked_range<size_t>& r){
             for(size_t i = r.begin(); i != r.end(); ++i){
                 auto* s = segs[i];
-                auto pre  = s->backwardNode().circuit->numPreliminaryPoints;
-                auto post = s->forwardNode().circuit->numPreliminaryPoints;
                 s->id = static_cast<int>(i);
-
-                auto& line = s->line;
-                auto& core = s->coreSize;
-
-                line.erase(line.begin(), line.begin() + pre);
-                line.erase(line.end() - post, line.end());
-                core.erase(core.begin(), core.begin() + pre);
-                core.erase(core.end() - post, core.end());
+                s->trimEnds(s->backwardNode().circuit->numPreliminaryPoints, s->forwardNode().circuit->numPreliminaryPoints);
             }
 	});
 
@@ -411,8 +402,7 @@ void BurgersLoopBuilder::createAndTraceSegment(const ClusterVector& burgersVecto
 	_danglingNodes.push_back(&segment->forwardNode());
 	_danglingNodes.push_back(&segment->backwardNode());
 
-	segment->line.push_back(backwardCircuit->calculateCenter());
-	segment->coreSize.push_back(backwardCircuit->countEdges());
+	segment->addPoint(true, backwardCircuit->calculateCenter(), static_cast<int>(backwardCircuit->countEdges()));
 
 	appendLinePoint(segment->forwardNode());
 
@@ -772,18 +762,9 @@ void BurgersLoopBuilder::appendLinePoint(DislocationNode& node){
 	DislocationSegment& segment = *node.segment;
 	assert(!segment.line.empty());
 
-	int coreSize = node.circuit->edgeCount;
-
-	const Point3& lastPoint = node.isForwardNode() ? segment.line.back() : segment.line.front();
-	Point3 newPoint = lastPoint + cell().wrapVector(node.circuit->calculateCenter() - lastPoint);
-
-	if(node.isForwardNode()){
-		segment.line.push_back(newPoint);
-		segment.coreSize.push_back(coreSize);
-	}else{
-		segment.line.insert(segment.line.begin(), newPoint);
-		segment.coreSize.insert(segment.coreSize.begin(), coreSize);
-	}
+	const Point3& lastPoint = node.position();
+	const Point3 newPoint = lastPoint + cell().wrapVector(node.circuit->calculateCenter() - lastPoint);
+	segment.addPoint(node.isForwardNode(), newPoint, static_cast<int>(node.circuit->edgeCount));
 
 	node.circuit->numPreliminaryPoints++;
 
@@ -975,14 +956,11 @@ void BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 				armNode->circuit->isDangling = false;
 				assert(armNode != armNode->junctionRing);
 
-				std::vector<Point3>& line = armNode->segment->line;
-				if(armNode->isForwardNode()){
-					line.push_back(line.back() + cell().wrapVector(centerOfMass - line.back()));
-					armNode->segment->coreSize.push_back(armNode->segment->coreSize.back());
-				}else{
-					line.insert(line.begin(), line.front() + cell().wrapVector(centerOfMass - line.front()));
-					armNode->segment->coreSize.insert(armNode->segment->coreSize.begin(), armNode->segment->coreSize.front());
-				}
+				DislocationSegment& segment = *armNode->segment;
+				const bool atForwardEnd = armNode->isForwardNode();
+				const Point3& end = armNode->position();
+				const int endCoreSize = atForwardEnd ? segment.coreSize.back() : segment.coreSize.front();
+				segment.addPoint(atForwardEnd, end + cell().wrapVector(centerOfMass - end), endCoreSize);
 
 				armNode->circuit->numPreliminaryPoints = 0;
 				armNode = armNode->junctionRing;
@@ -1007,9 +985,8 @@ void BurgersLoopBuilder::joinSegments(int maxCircuitLength){
 				assert(loop->isClosedLoop());
 
 				if(!cell().wrapVector(node1->position() - node2->position()).isZero(CA_ATOM_VECTOR_EPSILON)){
-					loop->line.push_back(loop->line.back() + cell().wrapVector(loop->line.front() - loop->line.back()));
+					loop->addPoint(true, loop->line.back() + cell().wrapVector(loop->line.front() - loop->line.back()), loop->coreSize.back());
 					assert(cell().wrapVector(node1->position() - node2->position()).isZero(CA_ATOM_VECTOR_EPSILON));
-					loop->coreSize.push_back(loop->coreSize.back());
 				}
 
 				assert(loop->line.size() >= 3);

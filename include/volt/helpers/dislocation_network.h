@@ -127,6 +127,24 @@ struct DislocationSegment{
 		std::ranges::reverse(line);
 		std::ranges::reverse(coreSize);
 	}
+
+	// line and coreSize hold one entry per point: these change both together.
+	void addPoint(bool atForwardEnd, const Point3& point, int core){
+		if(atForwardEnd){
+			line.push_back(point);
+			coreSize.push_back(core);
+		}else{
+			line.insert(line.begin(), point);
+			coreSize.insert(coreSize.begin(), core);
+		}
+	}
+
+	void trimEnds(std::size_t front, std::size_t back){
+		line.erase(line.begin(), line.begin() + front);
+		line.erase(line.end() - back, line.end());
+		coreSize.erase(coreSize.begin(), coreSize.begin() + front);
+		coreSize.erase(coreSize.end() - back, coreSize.end());
+	}
 };
 
 inline bool DislocationNode::isForwardNode() const{
