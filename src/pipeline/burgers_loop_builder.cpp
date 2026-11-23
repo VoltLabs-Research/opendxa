@@ -43,22 +43,23 @@ void BurgersLoopBuilder::traceDislocationSegments(){
 
     // One step per circuit length, from 3 up to the stretched maximum.
     ProgressReporter progress("Tracing Burgers circuits",
-        static_cast<std::uint64_t>(std::max(0, _maxExtendedBurgersCircuitSize - 2)));
-    for(int L : std::views::iota(3, _maxExtendedBurgersCircuitSize + 1)){
+        static_cast<std::uint64_t>(std::max(0, _maxExtendedCircuitSize - 2)));
+    for(int maxCircuitLength : std::views::iota(3, _maxExtendedCircuitSize + 1)){
         auto dangling = _danglingNodes;
 
         if(!dangling.empty()){
             for(auto* node : dangling){
-                traceSegment(*node, L, L <= _maxBurgersCircuitSize);
+                traceSegment(*node, maxCircuitLength, maxCircuitLength <= _maxTrialCircuitSize);
             }
         }
 
-        if((L & 1) && L <= _maxBurgersCircuitSize){
-            findPrimarySegments(L);
+        // An even length has the same search depth, (n - 1) / 2, as the odd length before it, so it is skipped.
+        if((maxCircuitLength & 1) && maxCircuitLength <= _maxTrialCircuitSize){
+            findPrimarySegments(maxCircuitLength);
         }
-        joinSegments(L);
+        joinSegments(maxCircuitLength);
 
-        if(L >= _maxBurgersCircuitSize && !dangling.empty()){
+        if(maxCircuitLength >= _maxTrialCircuitSize && !dangling.empty()){
             tbb::parallel_for_each(dangling.begin(), dangling.end(), [&](DislocationNode* node){
                 auto* C = node->circuit;
                 if(C->isDangling && C->segmentMeshCap.empty()){
@@ -67,7 +68,7 @@ void BurgersLoopBuilder::traceDislocationSegments(){
                 }
             });
         }
-        progress.update(static_cast<std::uint64_t>(L - 2));
+        progress.update(static_cast<std::uint64_t>(maxCircuitLength - 2));
     }
 }
 
@@ -311,15 +312,15 @@ bool intersectsOtherCircuits(const BurgersCircuit* circuit){
 
 }
 
-void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
-    const int searchDepth = (maxBurgersCircuitSize - 1) / 2;
+void BurgersLoopBuilder::findPrimarySegments(int maxCircuitLength){
+    const int searchDepth = (maxCircuitLength - 1) / 2;
     assert(searchDepth >= 1);
 
     CircuitSearch search;
     for(InterfaceMesh::Edge* closingEdge : findClosingEdges(mesh().vertices(), searchDepth)){
         if(closingEdge->circuit != nullptr) continue;
         search.run(closingEdge->vertex1(), searchDepth, [&](InterfaceMesh::Edge* edge, SearchNode* from, SearchNode* reached){
-            return createPrimaryCircuit(edge, from, reached, maxBurgersCircuitSize);
+            return createPrimaryCircuit(edge, from, reached, maxCircuitLength);
         });
     }
 }
@@ -327,7 +328,7 @@ void BurgersLoopBuilder::findPrimarySegments(int maxBurgersCircuitSize){
 // Builds the circuit that edge closes, out of the search paths that reach its two ends, and starts a segment from it if
 // it encloses a dislocation. Returns whether to stop searching from this start vertex: once a segment was started, or
 // when the circuit crosses an existing one, whose dislocation is already being traced.
-bool BurgersLoopBuilder::createPrimaryCircuit(InterfaceMesh::Edge* edge, SearchNode* from, SearchNode* reached, int maxBurgersCircuitSize){
+bool BurgersLoopBuilder::createPrimaryCircuit(InterfaceMesh::Edge* edge, SearchNode* from, SearchNode* reached, int maxCircuitLength){
 	if(edge->circuit != nullptr) return false;
 	assert(from != reached);
 
@@ -388,7 +389,7 @@ bool BurgersLoopBuilder::createPrimaryCircuit(InterfaceMesh::Edge* edge, SearchN
 		return intersects;
 	}
 
-	createAndTraceSegment(ClusterVector(b, forwardCircuit->firstEdge->clusterTransition->cluster1), forwardCircuit, maxBurgersCircuitSize);
+	createAndTraceSegment(ClusterVector(b, forwardCircuit->firstEdge->clusterTransition->cluster1), forwardCircuit, maxCircuitLength);
 	return true;
 }
 

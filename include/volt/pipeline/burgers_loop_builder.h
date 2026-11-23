@@ -33,8 +33,8 @@ public:
 	BurgersLoopBuilder(InterfaceMesh& mesh, int maxTrialCircuitSize, int maxCircuitElongation) :
 		_mesh(mesh),
 		_unusedCircuit(nullptr),
-		_maxBurgersCircuitSize(maxTrialCircuitSize),
-		_maxExtendedBurgersCircuitSize(maxTrialCircuitSize + maxCircuitElongation){}
+		_maxTrialCircuitSize(maxTrialCircuitSize),
+		_maxExtendedCircuitSize(maxTrialCircuitSize + maxCircuitElongation){}
 
 	const InterfaceMesh& mesh() const{
 		return _mesh;
@@ -64,11 +64,11 @@ public:
 	}
 
 	[[nodiscard]] int maxTrialCircuitSize() const noexcept{
-		return _maxBurgersCircuitSize;
+		return _maxTrialCircuitSize;
 	}
 
 	[[nodiscard]] int maxExtendedCircuitSize() const noexcept{
-		return _maxExtendedBurgersCircuitSize;
+		return _maxExtendedCircuitSize;
 	}
 
 	[[nodiscard]] std::vector<int> coreAtomDislocationIds(std::size_t particleCount) const;
@@ -87,8 +87,8 @@ private:
 	void markCoreCells(DislocationNode& node, const Point3& center);
 	void createSecondarySegment(InterfaceMesh::Edge* firstEdge, BurgersCircuit* outerCircuit, int maxCircuitLength);
 
-	void findPrimarySegments(int maxBurgersCircuitSize);
-	bool createPrimaryCircuit(InterfaceMesh::Edge* edge, SearchNode* from, SearchNode* reached, int maxBurgersCircuitSize);
+	void findPrimarySegments(int maxCircuitLength);
+	bool createPrimaryCircuit(InterfaceMesh::Edge* edge, SearchNode* from, SearchNode* reached, int maxCircuitLength);
 	bool tryRemoveTwoCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2);
 	bool tryRemoveThreeCircuitEdges(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2, bool markSwept);
 	bool tryRemoveOneCircuitEdge(InterfaceMesh::Edge*& edge0, InterfaceMesh::Edge*& edge1, InterfaceMesh::Edge*& edge2, bool markSwept);
@@ -114,8 +114,8 @@ private:
 	InterfaceMesh& _mesh;
 	DislocationNetwork _network;
 
-	int _maxBurgersCircuitSize;
-	int _maxExtendedBurgersCircuitSize;
+	int _maxTrialCircuitSize;
+	int _maxExtendedCircuitSize;
 
 	MemoryPool<BurgersCircuit> _circuitPool;
 	std::vector<DislocationNode*> _danglingNodes;
