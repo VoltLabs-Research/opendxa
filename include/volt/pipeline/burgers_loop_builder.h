@@ -32,7 +32,6 @@ public:
 
 	BurgersLoopBuilder(InterfaceMesh& mesh, int maxTrialCircuitSize, int maxCircuitElongation) :
 		_mesh(mesh),
-		_unusedCircuit(nullptr),
 		_maxTrialCircuitSize(maxTrialCircuitSize),
 		_maxExtendedCircuitSize(maxTrialCircuitSize + maxCircuitElongation){}
 
@@ -121,7 +120,7 @@ private:
 
 	MemoryPool<BurgersCircuit> _circuitPool;
 	std::vector<DislocationNode*> _danglingNodes;
-	BurgersCircuit* _unusedCircuit;
+	BurgersCircuit* _unusedCircuit = nullptr;
 	size_t _edgeStartIndex = 0;
 
 	bool _markCoreAtoms = false;

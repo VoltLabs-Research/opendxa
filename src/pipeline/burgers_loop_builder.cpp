@@ -11,7 +11,6 @@
 #include <unordered_set>
 #include <ranges>
 #include <array>
-#include <atomic>
 #include <algorithm>
 #include <utility>
 
