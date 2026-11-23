@@ -43,16 +43,11 @@ std::string burgersVectorLabel(const Vector3& vector){
         + std::to_string(vector.z()) + "]";
 }
 
-struct BurgersFamilyMatch{
-    const char* name;
-    const char* label;
-};
-
-constexpr BurgersFamilyMatch OTHER_BURGERS_FAMILY{"Other", "Other"};
+const BurgersFamily OTHER_BURGERS_FAMILY{"Other", "Other"};
 
 struct CubicBurgersFamily{
     std::array<double, 3> sortedAbsComponents;
-    BurgersFamilyMatch family;
+    BurgersFamily family;
 };
 
 const CubicBurgersFamily FCC_BURGERS_FAMILIES[] = {
@@ -78,19 +73,26 @@ const CubicBurgersFamily SC_BURGERS_FAMILIES[] = {
 struct HexagonalBurgersFamily{
     double basalLength;
     double axialLength;
-    BurgersFamilyMatch family;
+    BurgersFamily family;
 };
 
+// HCP lengths in the units of the local Burgers vectors, where the nearest-neighbour distance is a = 1/√2 and
+// c/a takes its ideal value √(8/3).
+constexpr double kHcpA = 0.7071067811865476;         // 1/√2
+constexpr double kHcpShockley = 0.4082482904638630;  // a/√3
+constexpr double kHcpC = 1.1547005383792515;         // a·√(8/3)
+constexpr double kHcpHalfC = 0.5773502691896257;     // c/2
+
 const HexagonalBurgersFamily HCP_BURGERS_FAMILIES[] = {
-    {0.7071067811865476, 0.0, {"1/3<1-210>", "1/3<1-210> (Perfect basal)"}},
-    {0.4082482904638630, 0.0, {"1/3<1-100>", "1/3<1-100> (Shockley)"}},
-    {0.0, 1.1547005383792515, {"<0001>", "<0001> (Perfect c)"}},
-    {0.0, 0.5773502691896257, {"1/2<0001>", "1/2<0001> (Partial c)"}},
-    {0.7071067811865476, 1.1547005383792515, {"1/3<1-213>", "1/3<1-213> (Perfect c+a)"}}
+    {kHcpA, 0.0, {"1/3<1-210>", "1/3<1-210> (Perfect basal)"}},
+    {kHcpShockley, 0.0, {"1/3<1-100>", "1/3<1-100> (Shockley)"}},
+    {0.0, kHcpC, {"<0001>", "<0001> (Perfect c)"}},
+    {0.0, kHcpHalfC, {"1/2<0001>", "1/2<0001> (Partial c)"}},
+    {kHcpA, kHcpC, {"1/3<1-213>", "1/3<1-213> (Perfect c+a)"}}
 };
 
 template<std::size_t N>
-BurgersFamilyMatch matchCubicBurgersFamily(
+const BurgersFamily& matchCubicBurgersFamily(
     const Vector3& localBurgers,
     const CubicBurgersFamily (&families)[N],
     double tolerance
@@ -111,7 +113,7 @@ BurgersFamilyMatch matchCubicBurgersFamily(
     return OTHER_BURGERS_FAMILY;
 }
 
-BurgersFamilyMatch matchHexagonalBurgersFamily(const Vector3& localBurgers, double tolerance){
+const BurgersFamily& matchHexagonalBurgersFamily(const Vector3& localBurgers, double tolerance){
     const double basal = std::hypot(localBurgers.x(), localBurgers.y());
     const double axial = std::abs(localBurgers.z());
     for(const auto& candidate : HCP_BURGERS_FAMILIES){
@@ -121,29 +123,6 @@ BurgersFamilyMatch matchHexagonalBurgersFamily(const Vector3& localBurgers, doub
         }
     }
     return OTHER_BURGERS_FAMILY;
-}
-
-BurgersFamilyMatch classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure){
-    LatticeStructureType structure = LATTICE_OTHER;
-    if(crystalStructure.empty() || !parseLatticeStructureType(crystalStructure, structure)){
-        return OTHER_BURGERS_FAMILY;
-    }
-
-    constexpr double tolerance = 0.01;
-    switch(structure){
-        case LATTICE_FCC:
-        case LATTICE_CUBIC_DIAMOND:
-            return matchCubicBurgersFamily(localBurgers, FCC_BURGERS_FAMILIES, tolerance);
-        case LATTICE_BCC:
-            return matchCubicBurgersFamily(localBurgers, BCC_BURGERS_FAMILIES, tolerance);
-        case LATTICE_SC:
-            return matchCubicBurgersFamily(localBurgers, SC_BURGERS_FAMILIES, tolerance);
-        case LATTICE_HCP:
-        case LATTICE_HEX_DIAMOND:
-            return matchHexagonalBurgersFamily(localBurgers, tolerance);
-        default:
-            return OTHER_BURGERS_FAMILY;
-    }
 }
 
 int structureTypeOf(const StructureContext& context, std::size_t atomIndex){
@@ -545,8 +524,26 @@ int countDanglingSegments(const DislocationNetwork* network){
 }
 
 BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure){
-    const BurgersFamilyMatch match = Detail::classifyBurgersFamily(localBurgers, crystalStructure);
-    return BurgersFamily{match.name, match.label};
+    LatticeStructureType structure = LATTICE_OTHER;
+    if(crystalStructure.empty() || !parseLatticeStructureType(crystalStructure, structure)){
+        return OTHER_BURGERS_FAMILY;
+    }
+
+    constexpr double tolerance = 0.01;
+    switch(structure){
+        case LATTICE_FCC:
+        case LATTICE_CUBIC_DIAMOND:
+            return matchCubicBurgersFamily(localBurgers, FCC_BURGERS_FAMILIES, tolerance);
+        case LATTICE_BCC:
+            return matchCubicBurgersFamily(localBurgers, BCC_BURGERS_FAMILIES, tolerance);
+        case LATTICE_SC:
+            return matchCubicBurgersFamily(localBurgers, SC_BURGERS_FAMILIES, tolerance);
+        case LATTICE_HCP:
+        case LATTICE_HEX_DIAMOND:
+            return matchHexagonalBurgersFamily(localBurgers, tolerance);
+        default:
+            return OTHER_BURGERS_FAMILY;
+    }
 }
 
 void streamDislocationsToFile(
@@ -611,7 +608,7 @@ void streamDislocationsToFile(
                     ? chunkCluster->topologyName
                     : structureTypeName(chunkCluster->structure))
                 : std::string();
-            const BurgersFamilyMatch family = Detail::classifyBurgersFamily(c.burgersLocal, c.crystalStructure);
+            const BurgersFamily family = classifyBurgersFamily(c.burgersLocal, c.crystalStructure);
             c.burgersFamily = family.name;
             c.burgersFamilyLabel = family.label;
             const std::string summaryKey = c.burgersFamily != "Other"
