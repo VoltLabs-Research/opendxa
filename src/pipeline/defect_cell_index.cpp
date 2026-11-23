@@ -39,12 +39,8 @@ DefectCellIndex::DefectCellIndex(DelaunayTessellation& tessellation, double alph
     std::vector<IndexValue> values;
 
     for(auto cell : tessellation.cells()){
-        bool accepted = tessellation.isValidCell(cell) && tessellation.getUserField(cell) == 0;
-        if(accepted){
-            const auto passesAlpha = tessellation.alphaTest(cell, alpha);
-            accepted = passesAlpha.has_value() && *passesAlpha;
-        }
-
+        const bool accepted = tessellation.isValidCell(cell) && tessellation.getUserField(cell) == 0
+            && tessellation.alphaTest(cell, alpha).value_or(false);
         if(!accepted){
             tessellation.setUserField(cell, -1);
             continue;
@@ -64,17 +60,15 @@ DefectCellIndex::DefectCellIndex(DelaunayTessellation& tessellation, double alph
 
 DefectCellIndex::~DefectCellIndex() = default;
 
-void DefectCellIndex::queryOverlapping(
-    const Box3& box,
-    std::vector<DelaunayTessellation::CellHandle>& out
-) const{
-    out.clear();
+std::vector<DelaunayTessellation::CellHandle> DefectCellIndex::queryOverlapping(const Box3& box) const{
+    std::vector<DelaunayTessellation::CellHandle> cells;
     _impl->tree.query(
         bgi::intersects(toIndexBox(box)),
-        boost::make_function_output_iterator([&out](const IndexValue& value){
-            out.push_back(value.second);
+        boost::make_function_output_iterator([&cells](const IndexValue& value){
+            cells.push_back(value.second);
         })
     );
+    return cells;
 }
 
 }

@@ -23,7 +23,7 @@ public:
         return _cellCount;
     }
 
-    void queryOverlapping(const Box3& box, std::vector<DelaunayTessellation::CellHandle>& out) const;
+    [[nodiscard]] std::vector<DelaunayTessellation::CellHandle> queryOverlapping(const Box3& box) const;
 
 private:
     struct Impl;

@@ -810,10 +810,7 @@ void BurgersLoopBuilder::markCoreCells(DislocationNode& node, const Point3& cent
 		edge = edge->nextCircuitEdge;
 	}while(edge != nullptr && edge != node.circuit->firstEdge);
 
-	std::vector<DelaunayTessellation::CellHandle> candidates;
-	_defectCells->queryOverlapping(capBounds, candidates);
-
-	for(auto candidate : candidates){
+	for(auto candidate : _defectCells->queryOverlapping(capBounds)){
 		const int slot = tessellation.getUserField(candidate);
 		if(slot < 0 || static_cast<std::size_t>(slot) >= _coreCellClaims.size()) continue;
 
