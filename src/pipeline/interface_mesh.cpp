@@ -129,7 +129,7 @@ bool InterfaceMesh::generateDefectMesh(
     outMesh.reserveFaces(faces().size());
 
     for(auto* f : faces()){
-        if(f->circuit && (f->testFlag(1) || !f->circuit->isDangling)) continue;
+        if(f->circuit && (f->testFlag(InterfaceMeshFace::kSweptBeforeCapFlag) || !f->circuit->isDangling)) continue;
         if(!f->edges()) continue;
 
         auto* nf = outMesh.createFace();

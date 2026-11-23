@@ -16,6 +16,10 @@ struct InterfaceMeshVertex{
 };
 
 struct InterfaceMeshFace{
+    // Set on a facet a circuit swept before storing its cap. generateDefectMesh drops these, and keeps the facets a
+    // still-dangling circuit swept after storing its cap: they lie between the cap and the circuit and close the mesh.
+    static constexpr unsigned int kSweptBeforeCapFlag = 1;
+
     BurgersCircuit* circuit = nullptr;
 };
 

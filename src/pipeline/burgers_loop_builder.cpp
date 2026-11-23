@@ -17,13 +17,22 @@
 
 namespace Volt{
 
+namespace{
+
+void sweepFacet(InterfaceMesh::Face* facet, BurgersCircuit* circuit, bool markSwept){
+    facet->circuit = circuit;
+    if(markSwept) facet->setFlag(InterfaceMeshFace::kSweptBeforeCapFlag);
+}
+
+}
+
 BurgersCircuit* BurgersLoopBuilder::allocateCircuit(){
     if(auto* circuit = std::exchange(_unusedCircuit, nullptr)) return circuit;
     return _circuitPool.construct();
 }
 
 void BurgersLoopBuilder::traceDislocationSegments(){
-    mesh().clearFaceFlag(0);
+    mesh().clearFaceFlag(InterfaceMeshFace::kSweptBeforeCapFlag);
 
     if(_markCoreAtoms){
         const double alpha = DefectCellIndex::kAlphaScale
@@ -478,10 +487,8 @@ BurgersCircuit* BurgersLoopBuilder::buildReverseCircuit(BurgersCircuit* forwardC
 			assert(innerEdge1->vertex1() == innerEdge2->vertex2());
 			assert(innerEdge1->circuit == nullptr || innerEdge1->circuit == backwardCircuit);
 			assert(innerEdge2->circuit == nullptr || innerEdge2->circuit == backwardCircuit);
-			facet1->setFlag(1);
-			facet1->circuit = backwardCircuit;
-			facet2->setFlag(1);
-			facet2->circuit = backwardCircuit;
+			sweepFacet(facet1, backwardCircuit, true);
+			sweepFacet(facet2, backwardCircuit, true);
 			innerEdge1->circuit = backwardCircuit;
 			innerEdge2->circuit = backwardCircuit;
 			innerEdge2->nextCircuitEdge = innerEdge1;
@@ -526,7 +533,7 @@ BurgersCircuit* BurgersLoopBuilder::buildReverseCircuit(BurgersCircuit* forwardC
 	return backwardCircuit;
 }
 
-void BurgersLoopBuilder::traceSegment(DislocationSegment& segment, DislocationNode& node, int maxCircuitLength, bool isPrimarySegment){
+void BurgersLoopBuilder::traceSegment(DislocationSegment& segment, DislocationNode& node, int maxCircuitLength, bool markSwept){
     BurgersCircuit& circuit = *node.circuit;
     assert(circuit.countEdges() == circuit.edgeCount);
     assert(circuit.isDangling);
@@ -561,11 +568,11 @@ void BurgersLoopBuilder::traceSegment(DislocationSegment& segment, DislocationNo
             bool wasShortened = false;
             if(tryRemoveTwoCircuitEdges(edge0, edge1, edge2)){
                 wasShortened = true;
-			}else if(tryRemoveThreeCircuitEdges(edge0, edge1, edge2, isPrimarySegment)){
+			}else if(tryRemoveThreeCircuitEdges(edge0, edge1, edge2, markSwept)){
                 wasShortened = true;
-			}else if(tryRemoveOneCircuitEdge(edge0, edge1, edge2, isPrimarySegment)){
+			}else if(tryRemoveOneCircuitEdge(edge0, edge1, edge2, markSwept)){
                 wasShortened = true;
-			}else if(trySweepTwoFacets(edge0, edge1, edge2, isPrimarySegment)){
+			}else if(trySweepTwoFacets(edge0, edge1, edge2, markSwept)){
                 wasShortened = true;
 			}
 
@@ -594,7 +601,7 @@ void BurgersLoopBuilder::traceSegment(DislocationSegment& segment, DislocationNo
         edge0 = firstEdge;
         edge1 = firstEdge->nextCircuitEdge;
         do{
-            if(tryInsertOneCircuitEdge(edge0, edge1, isPrimarySegment)){
+            if(tryInsertOneCircuitEdge(edge0, edge1, markSwept)){
                 wasExtended = true;
                 appendLinePoint(node);
                 break;
@@ -635,7 +642,7 @@ bool BurgersLoopBuilder::tryRemoveThreeCircuitEdges(
 	InterfaceMesh::Edge*& edge0, 
 	InterfaceMesh::Edge*& edge1, 
 	InterfaceMesh::Edge*& edge2,
-	bool isPrimarySegment
+	bool markSwept
 ){
 	InterfaceMesh::Face* facet1 = edge1->face();
 	InterfaceMesh::Face* facet2 = edge2->face();
@@ -665,8 +672,7 @@ bool BurgersLoopBuilder::tryRemoveThreeCircuitEdges(
 	edge1 = edge3->nextCircuitEdge;
 	edge2 = edge1->nextCircuitEdge;
 
-	facet1->circuit = circuit;
-	if(isPrimarySegment) facet1->setFlag(1);
+	sweepFacet(facet1, circuit, markSwept);
 
 	return true;
 }
@@ -675,7 +681,7 @@ bool BurgersLoopBuilder::tryRemoveOneCircuitEdge(
 	InterfaceMesh::Edge*& edge0, 
 	InterfaceMesh::Edge*& edge1, 
 	InterfaceMesh::Edge*& edge2, 
-	bool isPrimarySegment
+	bool markSwept
 ){
 	InterfaceMesh::Face* facet1 = edge1->face();
 	InterfaceMesh::Face* facet2 = edge2->face();
@@ -716,8 +722,7 @@ bool BurgersLoopBuilder::tryRemoveOneCircuitEdge(
 	edge2 = shortEdge->nextCircuitEdge;
 	shortEdge->circuit = circuit;
 
-	facet1->circuit = circuit;
-	if(isPrimarySegment) facet1->setFlag(1);
+	sweepFacet(facet1, circuit, markSwept);
 
 	return true;
 }
@@ -726,7 +731,7 @@ bool BurgersLoopBuilder::trySweepTwoFacets(
 	InterfaceMesh::Edge*& edge0, 
 	InterfaceMesh::Edge*& edge1, 
 	InterfaceMesh::Edge*& edge2, 
-	bool isPrimarySegment
+	bool markSwept
 ){
 	InterfaceMesh::Face* facet1 = edge1->face();
 	InterfaceMesh::Face* facet2 = edge2->face();
@@ -762,12 +767,8 @@ bool BurgersLoopBuilder::trySweepTwoFacets(
 	outerEdge1->circuit = circuit;
 	outerEdge2->circuit = circuit;
 
-	facet1->circuit = circuit;
-	facet2->circuit = circuit;
-	if(isPrimarySegment){
-		facet1->setFlag(1);
-		facet2->setFlag(1);
-	}
+	sweepFacet(facet1, circuit, markSwept);
+	sweepFacet(facet2, circuit, markSwept);
 
 	edge0 = outerEdge1;
 	edge1 = outerEdge2;
@@ -779,7 +780,7 @@ bool BurgersLoopBuilder::trySweepTwoFacets(
 bool BurgersLoopBuilder::tryInsertOneCircuitEdge(
 	InterfaceMesh::Edge*& edge0, 
 	InterfaceMesh::Edge*& edge1, 
-	bool isPrimarySegment
+	bool markSwept
 ){
 	assert(edge0 != edge1->oppositeEdge());
 
@@ -813,8 +814,7 @@ bool BurgersLoopBuilder::tryInsertOneCircuitEdge(
 
 	assert(circuit->countEdges() == circuit->edgeCount);
 
-	facet->circuit = circuit;
-	if(isPrimarySegment) facet->setFlag(1);
+	sweepFacet(facet, circuit, markSwept);
 
 	return true;
 }
