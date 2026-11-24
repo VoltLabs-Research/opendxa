@@ -6,6 +6,7 @@
 #include <boost/iterator/counting_iterator.hpp>
 
 #include <Delaunay_psm.h>
+#include <cstdint>
 #include <vector>
 #include <utility>
 
@@ -155,6 +156,13 @@ public:
 
 
 private:
+    // Relative to the cell diagonal. The jitter breaks the exact degeneracies of a perfect lattice (four or more
+    // cospherical points); it is hashed from the atom index so that it does not depend on the thread schedule.
+    static constexpr double kRelativeJitter = 1e-10;
+
+    static std::uint64_t splitMix64(std::uint64_t z);
+    static void initializeGeogram();
+
     void insertPrimaryPoints(const SimulationCell& simCell, const Point3* positions, size_t numPoints, const int* selectedPoints);
     void insertGhostImages(const SimulationCell& simCell, double ghostLayerSize);
     void addBoundingCorners(const SimulationCell& simCell, double ghostLayerSize);

@@ -12,27 +12,20 @@
 
 namespace Volt{
 
-namespace{
-
-// Relative to the cell diagonal. The jitter breaks the exact degeneracies of a perfect lattice (four or more
-// cospherical points); it is hashed from the atom index so that it does not depend on the thread schedule.
-constexpr double kRelativeJitter = 1e-10;
-
-std::uint64_t splitMix64(std::uint64_t z){
+std::uint64_t DelaunayTessellation::splitMix64(std::uint64_t z){
 	z += 0x9E3779B97F4A7C15ull;
 	z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
 	z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
 	return z ^ (z >> 31);
 }
 
-void initializeGeogram(){
+void DelaunayTessellation::initializeGeogram(){
 	static std::mutex geogramMutex;
 	std::lock_guard<std::mutex> lock(geogramMutex);
 	GEO::initialize(GEO::GEOGRAM_NO_HANDLER);
 	GEO::set_assert_mode(GEO::ASSERT_ABORT);
 }
 
-}
 
 void DelaunayTessellation::generateTessellation(
 	const SimulationCell& simCell,
