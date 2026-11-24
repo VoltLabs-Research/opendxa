@@ -17,8 +17,6 @@
 #include <volt/utilities/json_utils.h>
 #include <volt/utilities/parquet_line_writer.h>
 #include <volt/utilities/parquet_mesh_writer.h>
-#include <tbb/parallel_reduce.h>
-#include <tbb/blocked_range.h>
 #include <spdlog/spdlog.h>
 #include <fmt/format.h>
 #include <filesystem>
@@ -360,35 +358,22 @@ int countDanglingSegments(const DislocationNetwork& network){
 json getNetworkStatistics(const DislocationNetwork& network, double cellVolume){
     const auto& segments = network.segments();
 
-    struct SegmentStats {
-        double length = 0.0;
-        int count = 0;
-    };
-    const SegmentStats totals = tbb::parallel_reduce(
-        tbb::blocked_range<size_t>(0, segments.size()),
-        SegmentStats{},
-        [&segments](const tbb::blocked_range<size_t>& r, SegmentStats val) -> SegmentStats {
-            for(size_t i = r.begin(); i < r.end(); ++i){
-                const auto* segment = segments[i];
-                if(segment && !segment->isDegenerate()){
-                    val.length += segment->calculateLength();
-                    val.count++;
-                }
-            }
-            return val;
-        },
-        [](const SegmentStats& a, const SegmentStats& b) -> SegmentStats {
-            return {a.length + b.length, a.count + b.count};
-        }
-    );
+    // Summed in segment order, so the totals are the same with any thread count.
+    double totalLength = 0.0;
+    int segmentCount = 0;
+    for(const DislocationSegment* segment : segments){
+        if(!segment || segment->isDegenerate()) continue;
+        totalLength += segment->calculateLength();
+        ++segmentCount;
+    }
 
     return json::array({json{
-        {"total_network_length", totals.length},
-        {"segment_count", totals.count},
+        {"total_network_length", totalLength},
+        {"segment_count", segmentCount},
         {"junction_count", static_cast<int>(network.junctionArmCounts().size())},
         {"dangling_segments", countDanglingSegments(network)},
-        {"average_segment_length", totals.count > 0 ? totals.length / totals.count : 0.0},
-        {"density", cellVolume > 0 ? totals.length / cellVolume : 0.0},
+        {"average_segment_length", segmentCount > 0 ? totalLength / segmentCount : 0.0},
+        {"density", cellVolume > 0 ? totalLength / cellVolume : 0.0},
         {"total_segments_including_degenerate", static_cast<int>(segments.size())}
     }});
 }
