@@ -36,10 +36,6 @@ std::vector<Point3> coarsenDislocationLine(
 	bool isClosedLoop,
 	bool isInfiniteLine
 ){
-	if(input.size() < 2){
-		return {};
-	}
-
 	if(linePointInterval <= 0 || input.size() < 4){
 		return input;
 	}
