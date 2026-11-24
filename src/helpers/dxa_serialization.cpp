@@ -351,17 +351,6 @@ std::array<const DislocationNode*, 2> endNodes(const DislocationSegment& segment
     return {&segment.forwardNode(), &segment.backwardNode()};
 }
 
-int countJunctions(const DislocationNetwork& network){
-    int junctions = 0;
-    for(const DislocationSegment* segment : network.segments()){
-        if(!segment) continue;
-        for(const DislocationNode* node : endNodes(*segment)){
-            if(!node->isDangling()) junctions++;
-        }
-    }
-    return junctions / 2;
-}
-
 int countDanglingSegments(const DislocationNetwork& network){
     return static_cast<int>(std::ranges::count_if(network.segments(), [](const DislocationSegment* segment){
         return segment && (segment->forwardNode().isDangling() || segment->backwardNode().isDangling());
@@ -396,7 +385,7 @@ json getNetworkStatistics(const DislocationNetwork& network, double cellVolume){
     return json::array({json{
         {"total_network_length", totals.length},
         {"segment_count", totals.count},
-        {"junction_count", countJunctions(network)},
+        {"junction_count", static_cast<int>(network.junctionArmCounts().size())},
         {"dangling_segments", countDanglingSegments(network)},
         {"average_segment_length", totals.count > 0 ? totals.length / totals.count : 0.0},
         {"density", cellVolume > 0 ? totals.length / cellVolume : 0.0},
@@ -405,18 +394,12 @@ json getNetworkStatistics(const DislocationNetwork& network, double cellVolume){
 }
 
 json getJunctionInformation(const DislocationNetwork& network){
+    const std::vector<int> junctionArms = network.junctionArmCounts();
     std::map<int, int> junctionArmDistribution;
-    int totalJunctions = 0;
-    for(const DislocationSegment* segment : network.segments()){
-        if(!segment) continue;
-        for(const DislocationNode* node : endNodes(*segment)){
-            const int arms = node->countJunctionArms();
-            if(arms > 1){
-                junctionArmDistribution[arms]++;
-                totalJunctions++;
-            }
-        }
+    for(const int arms : junctionArms){
+        junctionArmDistribution[arms]++;
     }
+    const int totalJunctions = static_cast<int>(junctionArms.size());
 
     json junctionInfo = json::array();
     if(junctionArmDistribution.empty()){

@@ -171,6 +171,10 @@ public:
 
 	void smoothDislocationLines(double lineSmoothingLevel, double linePointInterval);
 
+	// The number of arms of each junction, a ring of three or more segment ends, counted once per ring. A ring of two
+	// ends is the seam of a closed loop, not a junction.
+	[[nodiscard]] std::vector<int> junctionArmCounts() const;
+
 	DislocationSegment* createSegment(const ClusterVector& burgersVector);
 	void discardSegment(DislocationSegment* segment);
 

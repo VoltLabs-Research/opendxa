@@ -3,6 +3,7 @@
 #include <volt/helpers/dislocation_network.h>
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
+#include <functional>
 #include <numeric>
 
 namespace Volt{
@@ -133,6 +134,26 @@ void smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, boo
 	}
 }
 
+}
+
+std::vector<int> DislocationNetwork::junctionArmCounts() const{
+	std::vector<int> arms;
+	for(const DislocationSegment* segment : _segments){
+		if(!segment) continue;
+		for(const DislocationNode* node : segment->nodes){
+			// Every end of a ring is visited; the ring is counted at its lowest-addressed end.
+			bool lowestEnd = true;
+			for(const DislocationNode* other = node->junctionRing; other != node; other = other->junctionRing){
+				if(std::less<const DislocationNode*>{}(other, node)){
+					lowestEnd = false;
+					break;
+				}
+			}
+			const int count = node->countJunctionArms();
+			if(lowestEnd && count >= 3) arms.push_back(count);
+		}
+	}
+	return arms;
 }
 
 void DislocationNetwork::smoothDislocationLines(double lineSmoothingLevel, double linePointInterval){

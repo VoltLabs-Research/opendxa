@@ -97,6 +97,7 @@ struct NetworkTopology{
 
 NetworkTopology summarizeNetworkTopology(const DislocationNetwork& network){
     NetworkTopology topology;
+    topology.junctions = network.junctionArmCounts().size();
     for(const DislocationSegment* segment : network.segments()){
         if(!segment) continue;
         if(segment->isClosedLoop()){
@@ -105,19 +106,7 @@ NetworkTopology summarizeNetworkTopology(const DislocationNetwork& network){
             continue;
         }
         for(const DislocationNode* node : segment->nodes){
-            if(node->isDangling()){
-                ++topology.danglingEnds;
-                continue;
-            }
-            // Every arm of a junction is visited; count the junction once, at its lowest-addressed arm.
-            bool lowestArm = true;
-            for(const DislocationNode* arm = node->junctionRing; arm != node; arm = arm->junctionRing){
-                if(std::less<const DislocationNode*>{}(arm, node)){
-                    lowestArm = false;
-                    break;
-                }
-            }
-            if(lowestArm) ++topology.junctions;
+            if(node->isDangling()) ++topology.danglingEnds;
         }
     }
     return topology;
