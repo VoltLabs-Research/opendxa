@@ -6,6 +6,9 @@
 #include <volt/structures/cluster_graph.h>
 #include <volt/analysis/structure_analysis.h>
 
+#include <optional>
+#include <utility>
+
 namespace Volt {
 
 class ElasticMapping{
@@ -26,10 +29,6 @@ class ElasticMapping{
         void assignClusterVector(Vector3 const& v, ClusterTransition* t) noexcept{
             clusterVector = v;
             clusterTransition = t;
-        }
-
-        void clearClusterVector() noexcept{
-            clusterTransition = nullptr;
         }
     };
 
@@ -63,14 +62,9 @@ public:
 
 	void generateTessellationEdges();
     void assignVerticesToClusters();
-    void assignIdealVectorsToEdges(bool reconstructEdgeVectors, int crystalPathSteps);
+    void assignIdealVectorsToEdges(int crystalPathSteps);
     [[nodiscard]] auto isElasticMappingCompatible(DelaunayTessellation::CellHandle cell) const -> bool;
     void releaseCaches() noexcept;
-
-    void shrinkVertexStorage() noexcept{
-        _vertexEdges.shrink_to_fit();
-        _vertexClusters.shrink_to_fit();
-    }
 
     [[nodiscard]] auto clusterOfVertex(int idx) const noexcept -> Cluster*{
 		assert(idx < (int)_vertexClusters.size());
@@ -78,23 +72,26 @@ public:
 	}
 
     [[nodiscard]] auto getEdgeClusterVector(int v1, int v2) const -> std::pair<Vector3, ClusterTransition*>{
-        auto* e = findEdge(v1, v2);
-        assert(e && e->hasClusterVector());
-        if(e->vertex1 == v1){
-            return { e->clusterVector, e->clusterTransition };
-		}
-
-		return {
-			e->clusterTransition->transform(-e->clusterVector),
-			e->clusterTransition->reverse
-		};
+        const auto oriented = orientedClusterVector(v1, v2);
+        assert(oriented);
+        return *oriented;
     }
 
     [[nodiscard]] auto edgeCount() const noexcept -> int {
-		return _edgeCount;
+		return static_cast<int>(_edges.size());
 	}
 
 private:
+    // The edge's ideal vector and transition read from v1 to v2, when the edge exists and has one.
+    [[nodiscard]] auto orientedClusterVector(int v1, int v2) const -> std::optional<std::pair<Vector3, ClusterTransition*>>{
+        const auto* e = findEdge(v1, v2);
+        if(!e || !e->hasClusterVector()) return std::nullopt;
+        if(e->vertex1 == v1) return std::pair{e->clusterVector, e->clusterTransition};
+        return std::pair{e->clusterTransition->transform(-e->clusterVector), e->clusterTransition->reverse};
+    }
+
+    [[nodiscard]] auto firstClusteredNeighbor(int vertex) const noexcept -> Cluster*;
+
     [[nodiscard]] auto findEdge(int v1, int v2) const noexcept -> TessellationEdge const* {
         assert(v1 >= 0 && v1 < static_cast<int>(_vertexEdges.size()));
         assert(v2 >= 0 && v2 < static_cast<int>(_vertexEdges.size()));
@@ -118,7 +115,6 @@ private:
     ClusterGraph& _clusterGraph;
 
     std::vector<TessellationEdge> _edges;
-    int _edgeCount = 0;
     std::vector<std::pair<int, int>> _vertexEdges;
     std::vector<Cluster*> _vertexClusters;
 };

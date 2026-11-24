@@ -193,10 +193,9 @@ void mapElastically(ElasticMapping& elasticMap, int crystalPathSteps){
     spdlog::info("[{:>6}ms]   ... vertex-to-cluster labels", lapMilliseconds(lap));
 
     steps.next("Assigning ideal vectors to edges");
-    elasticMap.assignIdealVectorsToEdges(false, crystalPathSteps);
+    elasticMap.assignIdealVectorsToEdges(crystalPathSteps);
     spdlog::info("[{:>6}ms]   ... ideal vectors on edges", lapMilliseconds(lap));
 
-    elasticMap.shrinkVertexStorage();
     spdlog::info("[{:>6}ms] Elastic mapping", millisecondsSince(total));
 }
 

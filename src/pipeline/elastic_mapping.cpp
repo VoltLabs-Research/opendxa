@@ -10,7 +10,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
-#include <queue>
 
 namespace Volt{
 
@@ -64,18 +63,10 @@ void ElasticMapping::generateTessellationEdges(){
 
         std::sort(edgeKeys.begin(), edgeKeys.end());
         edgeKeys.erase(std::unique(edgeKeys.begin(), edgeKeys.end()), edgeKeys.end());
-        if(edgeKeys.empty()){
-            return;
-        }
 
         std::lock_guard<std::mutex> lock(chunksMutex);
         sortedEdgeChunks.emplace_back(std::move(edgeKeys));
     });
-
-    if(sortedEdgeChunks.empty()){
-        _edgeCount = 0;
-        return;
-    }
 
     size_t totalKeys = 0;
     for(const auto& chunk : sortedEdgeChunks)
@@ -93,7 +84,6 @@ void ElasticMapping::generateTessellationEdges(){
     allKeys.erase(std::unique(allKeys.begin(), allKeys.end()), allKeys.end());
 
     _edges.reserve(allKeys.size());
-    _edgeCount = 0;
     for(uint64_t key : allKeys){
         const auto [v1, v2] = unpackEdgeKey(key);
         const int edgeIndex = static_cast<int>(_edges.size());
@@ -103,8 +93,19 @@ void ElasticMapping::generateTessellationEdges(){
         _vertexEdges[v1].first = edgeIndex;
         edge.nextArrivingEdge = _vertexEdges[v2].second;
         _vertexEdges[v2].second = edgeIndex;
-        ++_edgeCount;
     }
+}
+
+Cluster* ElasticMapping::firstClusteredNeighbor(int vertex) const noexcept{
+    for(int edgeIdx = _vertexEdges[vertex].first; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextLeavingEdge){
+        Cluster* neighbor = _vertexClusters[_edges[edgeIdx].vertex2];
+        if(neighbor->id != 0) return neighbor;
+    }
+    for(int edgeIdx = _vertexEdges[vertex].second; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextArrivingEdge){
+        Cluster* neighbor = _vertexClusters[_edges[edgeIdx].vertex1];
+        if(neighbor->id != 0) return neighbor;
+    }
+    return nullptr;
 }
 
 void ElasticMapping::assignVerticesToClusters(){
@@ -126,32 +127,10 @@ void ElasticMapping::assignVerticesToClusters(){
             tbb::blocked_range<size_t>(0, vertex_count),
             [&](const tbb::blocked_range<size_t>& r){
                 for(size_t idx = r.begin(); idx < r.end(); ++idx){
-                    Cluster* currentCluster = _vertexClusters[idx];
-                    Cluster* assignedCluster = currentCluster;
-                    if(currentCluster->id == 0){
-                        for(int edgeIdx = _vertexEdges[idx].first; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextLeavingEdge){
-                            auto const* e = &_edges[edgeIdx];
-                            Cluster* neighborCluster = _vertexClusters[e->vertex2];
-                            if(neighborCluster->id != 0){
-                                assignedCluster = neighborCluster;
-                                break;
-                            }
-                        }
-
-                        if(assignedCluster->id == 0){
-                            for(int edgeIdx = _vertexEdges[idx].second; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextArrivingEdge){
-                                auto const* e = &_edges[edgeIdx];
-                                Cluster* neighborCluster = _vertexClusters[e->vertex1];
-                                if(neighborCluster->id != 0){
-                                    assignedCluster = neighborCluster;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    nextClusters[idx] = assignedCluster;
-                    if(assignedCluster != currentCluster){
+                    Cluster* current = _vertexClusters[idx];
+                    Cluster* neighbor = current->id == 0 ? firstClusteredNeighbor(static_cast<int>(idx)) : nullptr;
+                    nextClusters[idx] = neighbor ? neighbor : current;
+                    if(neighbor){
                         anyChanged.store(true, std::memory_order_relaxed);
                     }
                 }
@@ -165,10 +144,9 @@ void ElasticMapping::assignVerticesToClusters(){
     }while(changed);
 }
 
-void ElasticMapping::assignIdealVectorsToEdges(bool reconstructEdgeVectors, int crystalPathSteps){
+void ElasticMapping::assignIdealVectorsToEdges(int crystalPathSteps){
     ProgressReporter progress("  Assigning ideal vectors to edges (by atom)", _vertexEdges.size());
     tbb::parallel_for(tbb::blocked_range<size_t>(0, _vertexEdges.size()), [&](const tbb::blocked_range<size_t>& r){
-        (void)reconstructEdgeVectors;
         CrystalPathFinder pathFinder{ structureAnalysis(), crystalPathSteps };
         for(size_t headIdx = r.begin(); headIdx != r.end(); ++headIdx){
             for(int edgeIdx = _vertexEdges[headIdx].first; edgeIdx >= 0; edgeIdx = _edges[edgeIdx].nextLeavingEdge){
@@ -180,22 +158,11 @@ void ElasticMapping::assignIdealVectorsToEdges(bool reconstructEdgeVectors, int 
                 
                 if(c1->id == 0 || c2->id == 0) continue;
 
-                if(auto optCv = pathFinder.findPath(edge->vertex1, edge->vertex2)){
-                    Vector3 localVec = optCv->localVec();
-                    Cluster* srcCl = optCv->cluster();
+                auto path = pathFinder.findPath(edge->vertex1, edge->vertex2);
+                if(!path || !path->transformToCluster(c1, clusterGraph())) continue;
 
-                    Vector3 vecInC1;
-                    if(srcCl == c1){
-                        vecInC1 = localVec;
-                    }else if(auto* tr = clusterGraph().determineClusterTransition(srcCl, c1)){
-                        vecInC1 = tr->transform(localVec);
-                    }else{
-                        continue;
-                    }
-
-                    if(auto* tr12 = clusterGraph().determineClusterTransition(c1, c2)){
-                        edge->assignClusterVector(vecInC1, tr12);
-                    }
+                if(auto* c1ToC2 = clusterGraph().determineClusterTransition(c1, c2)){
+                    edge->assignClusterVector(path->localVec(), c1ToC2);
                 }
             }
         }
@@ -211,20 +178,9 @@ bool ElasticMapping::isElasticMappingCompatible(DelaunayTessellation::CellHandle
         auto [vi, vj] = tetraEdgeVertices[i];
         int v1 = tessellation().vertexIndex(tessellation().cellVertex(cell, vi));
         int v2 = tessellation().vertexIndex(tessellation().cellVertex(cell, vj));
-        auto* te = findEdge(v1, v2);
-
-        if(!te || !te->hasClusterVector()){
-            return false;
-		}
-
-        if(te->vertex1 == v1){
-            edgeVecs[i] = { te->clusterVector, te->clusterTransition };
-        }else{
-            edgeVecs[i] = {
-                te->clusterTransition->transform(-te->clusterVector),
-                te->clusterTransition->reverse
-            };
-        }
+        const auto oriented = orientedClusterVector(v1, v2);
+        if(!oriented) return false;
+        edgeVecs[i] = *oriented;
     }
 
     static constexpr std::array<std::array<int, 3>, 4> circuits{{
@@ -257,7 +213,6 @@ bool ElasticMapping::isElasticMappingCompatible(DelaunayTessellation::CellHandle
 
 void ElasticMapping::releaseCaches() noexcept{
     std::vector<TessellationEdge>().swap(_edges);
-    _edgeCount = 0;
     std::vector<std::pair<int, int>>().swap(_vertexEdges);
     std::vector<Cluster*>().swap(_vertexClusters);
 }
