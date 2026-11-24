@@ -7,6 +7,8 @@
 #include <volt/pipeline/interface_mesh.h>
 #include <string_view>
 #include <optional>
+#include <unordered_map>
+#include <vector>
 
 namespace Volt{
 
@@ -73,6 +75,44 @@ public:
 	[[nodiscard]] std::vector<int> coreAtomDislocationIds(std::size_t particleCount) const;
 
 private:
+	// Bounds the walk around a vertex, should its fan of facets not close.
+	static constexpr int kMaxFanSteps = 1000;
+
+	// Breadth-first search over free edges, at most maxDepth edges away from its start vertex.
+	class CircuitSearch{
+	public:
+		// Calls onClosure(edge, from, reached) for each edge that closes a circuit with a non-zero Burgers vector, and
+		// stops when it returns true.
+		template<typename OnClosure>
+		void run(InterfaceMesh::Vertex* start, int maxDepth, OnClosure&& onClosure);
+
+	private:
+		void enqueue(SearchNode* node){
+			_queue.push_back(node);
+			_reached[node->vertex] = node;
+		}
+
+		MemoryPool<SearchNode> _pool;
+		std::vector<SearchNode*> _queue;
+		std::unordered_map<InterfaceMesh::Vertex*, SearchNode*> _reached;
+	};
+
+	static void sweepFacet(InterfaceMesh::Face* facet, BurgersCircuit* circuit, bool markSwept);
+	static void storeCaps(const std::vector<DislocationNode*>& nodes);
+	static void trimPreliminaryPoints(DislocationSegment& segment);
+	static void expressInReferenceStructure(DislocationSegment& segment, std::string_view referenceTopologyName);
+	static void orientCanonically(DislocationSegment& segment);
+	static bool isFreeEdge(const InterfaceMesh::Edge* edge);
+	static bool hasFreeEdge(const InterfaceMesh::Vertex* vertex);
+	static SearchNode* makeRoot(MemoryPool<SearchNode>& pool, InterfaceMesh::Vertex* vertex);
+	static SearchNode* makeChild(MemoryPool<SearchNode>& pool, SearchNode* parent, InterfaceMesh::Edge* edge, const Point3& coord);
+	static bool closesNonZeroCircuit(const SearchNode* from, const InterfaceMesh::Edge* edge, const Point3& coord, const SearchNode* reached);
+	static std::vector<InterfaceMesh::Edge*> findClosingEdges(const std::vector<InterfaceMesh::Vertex*>& vertices, int searchDepth);
+	static void unlinkCircuit(BurgersCircuit* circuit);
+	static bool leavesOtherCircuit(InterfaceMesh::Edge* aIn, InterfaceMesh::Edge* aOut, InterfaceMesh::Edge* bIn, InterfaceMesh::Edge* bOut);
+	static bool crossedAtVertex(InterfaceMesh::Edge* edge1, InterfaceMesh::Edge* edge2);
+	static bool intersectsOtherCircuits(const BurgersCircuit* circuit);
+
 	void indexDefectCells();
 	BurgersCircuit* allocateCircuit();
 	BurgersCircuit* buildReverseCircuit(BurgersCircuit* forwardCircuit);

@@ -16,25 +16,20 @@
 
 namespace Volt{
 
-namespace{
-
-void sweepFacet(InterfaceMesh::Face* facet, BurgersCircuit* circuit, bool markSwept){
+void BurgersLoopBuilder::sweepFacet(InterfaceMesh::Face* facet, BurgersCircuit* circuit, bool markSwept){
     facet->circuit = circuit;
     if(markSwept) facet->setFlag(InterfaceMeshFace::kSweptBeforeCapFlag);
 }
 
-}
 
 BurgersCircuit* BurgersLoopBuilder::allocateCircuit(){
     if(auto* circuit = std::exchange(_unusedCircuit, nullptr)) return circuit;
     return _circuitPool.construct();
 }
 
-namespace{
-
 // From the trial size on, each circuit that still dangles stores its cap once: the defect mesh closes the circuit's
 // hole with it, and the line drops the points traced after it.
-void storeCaps(const std::vector<DislocationNode*>& nodes){
+void BurgersLoopBuilder::storeCaps(const std::vector<DislocationNode*>& nodes){
     tbb::parallel_for_each(nodes.begin(), nodes.end(), [](DislocationNode* node){
         BurgersCircuit* circuit = node->circuit;
         if(circuit->isDangling && circuit->segmentMeshCap.empty()){
@@ -44,7 +39,6 @@ void storeCaps(const std::vector<DislocationNode*>& nodes){
     });
 }
 
-}
 
 void BurgersLoopBuilder::traceDislocationSegments(){
     mesh().clearFaceFlag(InterfaceMeshFace::kSweptBeforeCapFlag);
@@ -86,15 +80,13 @@ void BurgersLoopBuilder::discardCircuit(BurgersCircuit* circuit){
     _unusedCircuit = circuit;
 }
 
-namespace{
-
 // Drops the points each end traced after its circuit stored its cap, so that a dangling line stops at its cap.
-void trimPreliminaryPoints(DislocationSegment& segment){
+void BurgersLoopBuilder::trimPreliminaryPoints(DislocationSegment& segment){
     segment.trimEnds(segment.backwardNode().circuit->numPreliminaryPoints, segment.forwardNode().circuit->numPreliminaryPoints);
 }
 
 // Expresses b in a cluster of the reference structure when one transition links the segment's cluster to such a cluster.
-void expressInReferenceStructure(DislocationSegment& segment, std::string_view referenceTopologyName){
+void BurgersLoopBuilder::expressInReferenceStructure(DislocationSegment& segment, std::string_view referenceTopologyName){
     auto* cluster = segment.burgersVector.cluster();
     if(cluster->topologyName == referenceTopologyName) return;
 
@@ -111,7 +103,7 @@ void expressInReferenceStructure(DislocationSegment& segment, std::string_view r
 
 // Runs every line towards +x, +y or +z, along the axis its end-to-end vector is longest on, whichever way it was
 // traced. Closed loops, whose ends coincide, keep their direction.
-void orientCanonically(DislocationSegment& segment){
+void BurgersLoopBuilder::orientCanonically(DislocationSegment& segment){
     const auto& line = segment.line;
     if(line.empty()) return;
     const Vector3 dir = line.back() - line.front();
@@ -126,7 +118,6 @@ void orientCanonically(DislocationSegment& segment){
     }
 }
 
-}
 
 void BurgersLoopBuilder::finishDislocationSegments(std::string_view referenceTopologyName){
     const auto& segments = network().segments();
@@ -139,23 +130,19 @@ void BurgersLoopBuilder::finishDislocationSegments(std::string_view referenceTop
     });
 }
 
-namespace{
-
-using SearchNode = BurgersLoopSearchNode;
-
 // The search walks only edges that no circuit runs along and whose facet no circuit has swept.
-bool isFreeEdge(const InterfaceMesh::Edge* edge){
+bool BurgersLoopBuilder::isFreeEdge(const InterfaceMesh::Edge* edge){
     return !edge->nextCircuitEdge && !edge->face()->circuit;
 }
 
-bool hasFreeEdge(const InterfaceMesh::Vertex* vertex){
+bool BurgersLoopBuilder::hasFreeEdge(const InterfaceMesh::Vertex* vertex){
     for(auto* edge = vertex->edges(); edge != nullptr; edge = edge->nextVertexEdge()){
         if(isFreeEdge(edge)) return true;
     }
     return false;
 }
 
-SearchNode* makeRoot(MemoryPool<SearchNode>& pool, InterfaceMesh::Vertex* vertex){
+BurgersLoopBuilder::SearchNode* BurgersLoopBuilder::makeRoot(MemoryPool<SearchNode>& pool, InterfaceMesh::Vertex* vertex){
     auto* root = pool.construct();
     root->vertex = vertex;
     root->coord = Point3::Origin();
@@ -166,7 +153,7 @@ SearchNode* makeRoot(MemoryPool<SearchNode>& pool, InterfaceMesh::Vertex* vertex
     return root;
 }
 
-SearchNode* makeChild(MemoryPool<SearchNode>& pool, SearchNode* parent, InterfaceMesh::Edge* edge, const Point3& coord){
+BurgersLoopBuilder::SearchNode* BurgersLoopBuilder::makeChild(MemoryPool<SearchNode>& pool, SearchNode* parent, InterfaceMesh::Edge* edge, const Point3& coord){
     auto* child = pool.construct();
     child->vertex = edge->vertex2();
     child->coord = coord;
@@ -181,54 +168,41 @@ SearchNode* makeChild(MemoryPool<SearchNode>& pool, SearchNode* parent, Interfac
 
 // Arriving at a vertex the search already reached closes a circuit. It encloses a dislocation when the two paths to
 // the vertex agree on the lattice orientation but not on the lattice coordinate.
-bool closesNonZeroCircuit(const SearchNode* from, const InterfaceMesh::Edge* edge, const Point3& coord, const SearchNode* reached){
+bool BurgersLoopBuilder::closesNonZeroCircuit(const SearchNode* from, const InterfaceMesh::Edge* edge, const Point3& coord, const SearchNode* reached){
     const Vector3 b = reached->coord - coord;
     if(b.isZero(CA_LATTICE_VECTOR_EPSILON)) return false;
     const Matrix3 R = from->tm * edge->clusterTransition->reverse->tm;
     return R.equals(reached->tm, CA_TRANSITION_MATRIX_EPSILON);
 }
 
-// Breadth-first search over free edges, at most maxDepth edges away from its start vertex.
-class CircuitSearch{
-public:
-    // Calls onClosure(edge, from, reached) for each edge that closes a circuit with a non-zero Burgers vector, and
-    // stops when it returns true.
-    template<typename OnClosure>
-    void run(InterfaceMesh::Vertex* start, int maxDepth, OnClosure&& onClosure){
-        _queue.clear();
-        _reached.clear();
-        _pool.clear(true);
-        enqueue(makeRoot(_pool, start));
+// Calls onClosure(edge, from, reached) for each edge that closes a circuit with a non-zero Burgers vector, and
+// stops when it returns true.
+template<typename OnClosure>
+void BurgersLoopBuilder::CircuitSearch::run(InterfaceMesh::Vertex* start, int maxDepth, OnClosure&& onClosure){
+    _queue.clear();
+    _reached.clear();
+    _pool.clear(true);
+    enqueue(makeRoot(_pool, start));
 
-        for(size_t i = 0; i < _queue.size(); ++i){
-            SearchNode* from = _queue[i];
-            for(auto* edge = from->vertex->edges(); edge != nullptr; edge = edge->nextVertexEdge()){
-                if(!isFreeEdge(edge)) continue;
+    for(size_t i = 0; i < _queue.size(); ++i){
+        SearchNode* from = _queue[i];
+        for(auto* edge = from->vertex->edges(); edge != nullptr; edge = edge->nextVertexEdge()){
+            if(!isFreeEdge(edge)) continue;
 
-                const Point3 coord = from->coord + from->tm * edge->clusterVector;
-                if(const auto it = _reached.find(edge->vertex2()); it != _reached.end()){
-                    if(closesNonZeroCircuit(from, edge, coord, it->second) && onClosure(edge, from, it->second)) return;
-                }else if(from->depth < maxDepth){
-                    enqueue(makeChild(_pool, from, edge, coord));
-                }
+            const Point3 coord = from->coord + from->tm * edge->clusterVector;
+            if(const auto it = _reached.find(edge->vertex2()); it != _reached.end()){
+                if(closesNonZeroCircuit(from, edge, coord, it->second) && onClosure(edge, from, it->second)) return;
+            }else if(from->depth < maxDepth){
+                enqueue(makeChild(_pool, from, edge, coord));
             }
         }
     }
+}
 
-private:
-    void enqueue(SearchNode* node){
-        _queue.push_back(node);
-        _reached[node->vertex] = node;
-    }
-
-    MemoryPool<SearchNode> _pool;
-    std::vector<SearchNode*> _queue;
-    std::unordered_map<InterfaceMesh::Vertex*, SearchNode*> _reached;
-};
 
 // The first closing edge found from each vertex, sorted so that the serial pass creates circuits in a fixed order
 // rather than in the order the threads found them: each circuit it creates changes which edges are free.
-std::vector<InterfaceMesh::Edge*> findClosingEdges(const std::vector<InterfaceMesh::Vertex*>& vertices, int searchDepth){
+std::vector<InterfaceMesh::Edge*> BurgersLoopBuilder::findClosingEdges(const std::vector<InterfaceMesh::Vertex*>& vertices, int searchDepth){
     std::vector<InterfaceMesh::Edge*> closingEdges;
     tbb::spin_mutex closingEdgesMutex;
 
@@ -254,7 +228,7 @@ std::vector<InterfaceMesh::Edge*> findClosingEdges(const std::vector<InterfaceMe
 }
 
 // Frees the edges of a rejected circuit for later searches.
-void unlinkCircuit(BurgersCircuit* circuit){
+void BurgersLoopBuilder::unlinkCircuit(BurgersCircuit* circuit){
     InterfaceMesh::Edge* edge = circuit->firstEdge;
     do{
         InterfaceMesh::Edge* nextEdge = edge->nextCircuitEdge;
@@ -264,12 +238,9 @@ void unlinkCircuit(BurgersCircuit* circuit){
     }while(edge != circuit->firstEdge);
 }
 
-// Bounds the walk around a vertex, should its fan of facets not close.
-constexpr int kMaxFanSteps = 1000;
-
 // Circuit A enters a vertex over aIn and leaves it over aOut, circuit B over bIn and bOut. Walks the facets around the
 // vertex from bIn towards bOut: A crosses B there when it leaves into that side but did not enter from it.
-bool leavesOtherCircuit(InterfaceMesh::Edge* aIn, InterfaceMesh::Edge* aOut, InterfaceMesh::Edge* bIn, InterfaceMesh::Edge* bOut){
+bool BurgersLoopBuilder::leavesOtherCircuit(InterfaceMesh::Edge* aIn, InterfaceMesh::Edge* aOut, InterfaceMesh::Edge* bIn, InterfaceMesh::Edge* bOut){
     const InterfaceMesh::Vertex* vertex = bOut->vertex1();
     assert(aOut->vertex1() == vertex);
     assert(aIn->vertex2() == vertex);
@@ -293,7 +264,7 @@ bool leavesOtherCircuit(InterfaceMesh::Edge* aIn, InterfaceMesh::Edge* aOut, Int
 }
 
 // Whether a circuit through the vertex where circuit edge edge1 ends and edge2 starts crosses that circuit there.
-bool crossedAtVertex(InterfaceMesh::Edge* edge1, InterfaceMesh::Edge* edge2){
+bool BurgersLoopBuilder::crossedAtVertex(InterfaceMesh::Edge* edge1, InterfaceMesh::Edge* edge2){
     InterfaceMesh::Edge* sentinel = edge1->oppositeEdge();
     InterfaceMesh::Edge* edge = sentinel;
     do{
@@ -309,7 +280,7 @@ bool crossedAtVertex(InterfaceMesh::Edge* edge1, InterfaceMesh::Edge* edge2){
     return false;
 }
 
-bool intersectsOtherCircuits(const BurgersCircuit* circuit){
+bool BurgersLoopBuilder::intersectsOtherCircuits(const BurgersCircuit* circuit){
     InterfaceMesh::Edge* edge1 = circuit->firstEdge;
     do{
         InterfaceMesh::Edge* edge2 = edge1->nextCircuitEdge;
@@ -319,7 +290,6 @@ bool intersectsOtherCircuits(const BurgersCircuit* circuit){
     return false;
 }
 
-}
 
 void BurgersLoopBuilder::findPrimarySegments(int maxCircuitLength){
     const int searchDepth = (maxCircuitLength - 1) / 2;
