@@ -18,7 +18,6 @@
 #include <volt/utilities/parquet_line_writer.h>
 #include <volt/utilities/parquet_mesh_writer.h>
 #include <spdlog/spdlog.h>
-#include <fmt/format.h>
 #include <filesystem>
 #include <fstream>
 
@@ -599,7 +598,7 @@ void logLineSummary(std::size_t skippedSegments, std::size_t lineCount, const Li
     std::string families;
     for(const auto& [_, tally] : summary.byFamily){
         if(!families.empty()) families += ", ";
-        families += fmt::format("{} {} ({:.1f}%)", tally.label, tally.segmentCount,
+        families += spdlog::fmt_lib::format("{} {} ({:.1f}%)", tally.label, tally.segmentCount,
             summary.totalLength > 0 ? 100.0 * tally.totalLength / summary.totalLength : 0.0);
     }
     spdlog::info("  Burgers vector families (lines, % of length): {}", families);
