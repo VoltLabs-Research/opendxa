@@ -7,7 +7,6 @@
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
-#include <tbb/concurrent_vector.h>
 
 #include <boost/functional/hash.hpp>
 #include <unordered_map>
@@ -107,59 +106,51 @@ private:
         _tetrahedraFaceList.resize(_solidCells.size(), { nullptr, nullptr, nullptr, nullptr });
         _faceLookupMap.clear();
 
-        struct FacetCandidate{
-            CellHandle cell;
-            int internalIdx;
-            int faceIdx;
-            std::array<DelaunayTessellation::VertexHandle, 3> vertexHandles;
-            std::array<int, 3> vertexIndices;
-        };
-
-        tbb::concurrent_vector<FacetCandidate> allCandidates;
-        allCandidates.reserve(_solidCells.size());
-
+        // Bit f of a solid cell's mask: its facet f borders another region.
+        std::vector<std::uint8_t> interfaceFacets(_solidCells.size(), 0);
         tbb::parallel_for(tbb::blocked_range<size_t>(0, _solidCells.size(), 512),
             [&](const tbb::blocked_range<size_t>& r){
             for(size_t i = r.begin(); i < r.end(); ++i){
                 const CellHandle cell = _solidCells[i];
                 const int solidRegion = _tessellation.getUserField(cell);
-
+                std::uint8_t mask = 0;
                 for(int f = 0; f < 4; ++f){
-                    const CellHandle adjacentCell = _tessellation.mirrorFacet(cell, f).first;
-                    if(_tessellation.getUserField(adjacentCell) == solidRegion) continue;
-
-                    FacetCandidate candidate;
-                    candidate.cell = cell;
-                    candidate.internalIdx = static_cast<int>(i);
-                    candidate.faceIdx = f;
-                    for(int v = 0; v < 3; ++v){
-                        candidate.vertexHandles[v] = _tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(f, v));
-                        candidate.vertexIndices[v] = _tessellation.vertexIndex(candidate.vertexHandles[v]);
+                    if(_tessellation.getUserField(_tessellation.mirrorFacet(cell, f).first) != solidRegion){
+                        mask |= static_cast<std::uint8_t>(1u << f);
                     }
-                    allCandidates.push_back(candidate);
                 }
+                interfaceFacets[i] = mask;
             }
         });
 
-        // Faces are created serially in candidate order: the mesh's vertex and face numbering follows it.
-        _faceLookupMap.reserve(allCandidates.size());
-        for(const auto& candidate : allCandidates){
-            std::array<typename HalfEdgeStructureType::Vertex*, 3> facetVertices{};
-            for(int v = 0; v < 3; ++v){
-                const int idx = candidate.vertexIndices[v];
-                if(vertexMapIndices[idx] < 0){
-                    vertexMapIndices[idx] = _mesh.createVertex(_positions->getPoint3(idx))->index();
+        // Faces are created serially in cell and facet order, whatever the thread count: the mesh's vertex and face
+        // numbering follows it, and so does the order in which the tracer meets them.
+        for(size_t i = 0; i < _solidCells.size(); ++i){
+            const CellHandle cell = _solidCells[i];
+            for(int f = 0; f < 4; ++f){
+                if(!(interfaceFacets[i] & (1u << f))) continue;
+
+                std::array<DelaunayTessellation::VertexHandle, 3> vertexHandles;
+                std::array<int, 3> vertexIndices;
+                std::array<typename HalfEdgeStructureType::Vertex*, 3> facetVertices{};
+                for(int v = 0; v < 3; ++v){
+                    vertexHandles[v] = _tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(f, v));
+                    vertexIndices[v] = _tessellation.vertexIndex(vertexHandles[v]);
+                    const int idx = vertexIndices[v];
+                    if(vertexMapIndices[idx] < 0){
+                        vertexMapIndices[idx] = _mesh.createVertex(_positions->getPoint3(idx))->index();
+                    }
+                    facetVertices[v] = _mesh.vertex(vertexMapIndices[idx]);
                 }
-                facetVertices[v] = _mesh.vertex(vertexMapIndices[idx]);
+
+                auto* face = _mesh.createFace(facetVertices.begin(), facetVertices.end());
+                prepareMeshFaceFunc(face, vertexIndices, vertexHandles, cell);
+
+                auto orderedIndices = vertexIndices;
+                reorderFaceVertices(orderedIndices);
+                _faceLookupMap.insert({orderedIndices, face});
+                _tetrahedraFaceList[i][static_cast<size_t>(f)] = face;
             }
-
-            auto* face = _mesh.createFace(facetVertices.begin(), facetVertices.end());
-            prepareMeshFaceFunc(face, candidate.vertexIndices, candidate.vertexHandles, candidate.cell);
-
-            auto orderedIndices = candidate.vertexIndices;
-            reorderFaceVertices(orderedIndices);
-            _faceLookupMap.insert({orderedIndices, face});
-            _tetrahedraFaceList[static_cast<size_t>(candidate.internalIdx)][static_cast<size_t>(candidate.faceIdx)] = face;
         }
     }
 
