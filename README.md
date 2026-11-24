@@ -5,6 +5,7 @@ Dislocation analysis (DXA) driven by the structure-identification algorithm sele
 ## Install
 
 ```bash
+npm install -g @voltstack/vpm
 vpm install @voltlabs/opendxa
 ```
 
