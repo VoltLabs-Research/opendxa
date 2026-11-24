@@ -26,11 +26,7 @@ void DislocationNetwork::discardSegment(DislocationSegment* segment){
 	_segments.erase(it);
 }
 
-namespace{
-
-// Replaces runs of consecutive points with their mean. A run grows while its point count squared stays below
-// linePointInterval times its summed core size, so lines with wide cores keep fewer points. An open line keeps its ends.
-std::vector<Point3> coarsenDislocationLine(
+std::vector<Point3> DislocationNetwork::coarsenDislocationLine(
 	double linePointInterval,
 	const std::vector<Point3>& input,
 	const std::vector<int>& coreSize,
@@ -96,7 +92,7 @@ std::vector<Point3> coarsenDislocationLine(
 	return output;
 }
 
-void smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, bool isLoop){
+void DislocationNetwork::smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, bool isLoop){
 	if(smoothingLevel <= 0 || line.size() <= 2){
 		return;
 	}
@@ -134,7 +130,6 @@ void smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, boo
 	}
 }
 
-}
 
 std::vector<int> DislocationNetwork::junctionArmCounts() const{
 	std::vector<int> arms;

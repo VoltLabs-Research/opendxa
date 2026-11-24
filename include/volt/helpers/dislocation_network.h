@@ -179,6 +179,17 @@ public:
 	void discardSegment(DislocationSegment* segment);
 
 private:
+	// Replaces runs of consecutive points with their mean. A run grows while its point count squared stays below
+	// linePointInterval times its summed core size, so lines with wide cores keep fewer points. An open line keeps its ends.
+	static std::vector<Point3> coarsenDislocationLine(
+		double linePointInterval,
+		const std::vector<Point3>& input,
+		const std::vector<int>& coreSize,
+		bool isClosedLoop,
+		bool isInfiniteLine
+	);
+	static void smoothDislocationLine(double smoothingLevel, std::vector<Point3>& line, bool isLoop);
+
 	MemoryPool<DislocationNode> _nodePool;
 	std::vector<DislocationSegment*> _segments;
 	MemoryPool<DislocationSegment> _segmentPool;
