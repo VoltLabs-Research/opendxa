@@ -78,6 +78,25 @@ static PluginDescriptor buildDescriptor() {
     return descriptor;
 }
 
+// The lattice YAML's own name for a known topology. A name no YAML knows comes from the upstream contract and is used
+// as given.
+static std::string canonicalTopologyName(const std::string& name){
+    try{
+        const auto* topology = crystalTopologyByName(name);
+        if(!topology){
+            spdlog::info("Reference topology '{}' is not a known lattice topology; using it as given", name);
+            return name;
+        }
+        if(topology->name != name){
+            spdlog::info("Reference topology '{}' resolved to '{}'", name, topology->name);
+        }
+        return topology->name;
+    }catch(const std::exception& error){
+        spdlog::warn("Could not look up reference topology '{}' ({}); using it as given", name, error.what());
+        return name;
+    }
+}
+
 VOLT_PLUGIN_MAIN(buildDescriptor(),
     [](const OptsMap& opts, const LammpsParser::Frame& frame,
        const LammpsParser::Frame*, const std::string& outputBase) -> json {
@@ -95,20 +114,7 @@ VOLT_PLUGIN_MAIN(buildDescriptor(),
     S analyzer;
     applyAll(analyzer, bindings, opts);
 
-    std::string resolvedTopology = referenceName;
-    try{
-        if(const auto* topology = crystalTopologyByName(referenceName)){
-            resolvedTopology = topology->name;
-        }else{
-            spdlog::info("Reference topology '{}' is not a known lattice topology; using it as given", referenceName);
-        }
-    }catch(const std::exception& error){
-        spdlog::warn("Could not look up reference topology '{}' ({}); using it as given", referenceName, error.what());
-    }
-    if(resolvedTopology != referenceName){
-        spdlog::info("Reference topology '{}' resolved to '{}'", referenceName, resolvedTopology);
-    }
-    analyzer.setReferenceTopology(resolvedTopology);
+    analyzer.setReferenceTopology(canonicalTopologyName(referenceName));
 
     try{
         analyzer.compute(frame, outputBase);
@@ -116,7 +122,5 @@ VOLT_PLUGIN_MAIN(buildDescriptor(),
         return AnalysisResult::failure(std::string("DXA failed: ") + e.what());
     }
 
-    json result;
-    result["is_failed"] = false;
-    return result;
+    return AnalysisResult::success();
 })
