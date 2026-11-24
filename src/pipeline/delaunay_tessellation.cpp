@@ -1,6 +1,5 @@
 #include <volt/core/volt.h>
 #include <volt/pipeline/delaunay_tessellation.h>
-#include <volt/core/runtime_budget.h>
 
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
@@ -18,7 +17,6 @@ namespace{
 // Relative to the cell diagonal. The jitter breaks the exact degeneracies of a perfect lattice (four or more
 // cospherical points); it is hashed from the atom index so that it does not depend on the thread schedule.
 constexpr double kRelativeJitter = 1e-10;
-constexpr unsigned int kMaxDelaunayThreads = 16;
 
 std::uint64_t splitMix64(std::uint64_t z){
 	z += 0x9E3779B97F4A7C15ull;
@@ -192,30 +190,16 @@ void DelaunayTessellation::addBoundingCorners(const SimulationCell& simCell, dou
 	}
 }
 
+// Serial Geogram (BDEL) even when threads are available. The parallel backend (PDEL) builds the same tetrahedra but
+// numbers them in an order that changes from run to run, and the interface mesh and the Burgers circuit search follow
+// the cell order: with PDEL, the same input could give a different dislocation network on every run.
 void DelaunayTessellation::triangulate(){
-	const char* backend = "BDEL";
-	unsigned int delaunayThreads = 1;
-#ifdef VOLT_HAVE_PARALLEL_DELAUNAY
-	const unsigned int budget = static_cast<unsigned int>(std::max(1, Runtime::threadBudget()));
-	const unsigned int threads = std::min(budget, kMaxDelaunayThreads);
-	if(threads > 1){
-		GEO::Process::set_max_threads(threads);
-		backend = "PDEL";
-		delaunayThreads = threads;
-	}
-#endif
-	_dt = GEO::Delaunay::create(3, backend);
-	if(_dt.is_null()){
-		spdlog::warn("  Geogram Delaunay: backend '{}' unavailable, falling back to BDEL", backend);
-		backend = "BDEL";
-		_dt = GEO::Delaunay::create(3, backend);
-	}
+	_dt = GEO::Delaunay::create(3, "BDEL");
 	_dt->set_keeps_infinite(true);
 	_dt->set_reorder(true);
 	_dt->set_vertices(_pointData.size(), reinterpret_cast<const double*>(_pointData.data()));
 
-	spdlog::info("  Geogram Delaunay ({}, {} threads) complete: {} cells",
-		backend, delaunayThreads, _dt->nb_cells());
+	spdlog::info("  Geogram Delaunay (BDEL, 1 threads) complete: {} cells", _dt->nb_cells());
 }
 
 // Marks the cells that belong to a ghost image and numbers the others in cell order.
