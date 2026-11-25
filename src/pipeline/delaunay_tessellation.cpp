@@ -234,16 +234,6 @@ bool DelaunayTessellation::classifyGhostCell(CellHandle cell) const{
 	return isGhostVertex(headVertex);
 }
 
-static inline double determinant(double a00, double a01, double a02,
-                                 double a10, double a11, double a12,
-                                 double a20, double a21, double a22){
-    double m02 = a00*a21 - a20*a01;
-    double m01 = a00*a11 - a10*a01;
-    double m12 = a10*a21 - a20*a11;
-    double m012 = m01*a22 - m02*a12 + m12*a02;
-    return m012;
-}
-
 std::optional<bool> DelaunayTessellation::alphaTest(CellHandle cell, double alpha) const{
     auto v0 = _dt->vertex_ptr(cellVertex(cell, 0));
     auto v1 = _dt->vertex_ptr(cellVertex(cell, 1));

@@ -163,6 +163,16 @@ private:
     static std::uint64_t splitMix64(std::uint64_t z);
     static void initializeGeogram();
 
+    static double determinant(double a00, double a01, double a02,
+                              double a10, double a11, double a12,
+                              double a20, double a21, double a22){
+        double m02 = a00*a21 - a20*a01;
+        double m01 = a00*a11 - a10*a01;
+        double m12 = a10*a21 - a20*a11;
+        double m012 = m01*a22 - m02*a12 + m12*a02;
+        return m012;
+    }
+
     void insertPrimaryPoints(const SimulationCell& simCell, const Point3* positions, size_t numPoints, const int* selectedPoints);
     void insertGhostImages(const SimulationCell& simCell, double ghostLayerSize);
     void addBoundingCorners(const SimulationCell& simCell, double ghostLayerSize);
