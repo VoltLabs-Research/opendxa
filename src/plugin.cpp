@@ -1,3 +1,4 @@
+#include <volt/dxa_plugin.h>
 #include <volt/plugin/plugin_entry.h>
 #include <volt/pipeline/dislocation_analysis.h>
 #include <volt/structures/crystal_topology_registry.h>
@@ -35,7 +36,9 @@ static const std::vector<OptionBinding<S>> bindings = {
     opt("--cover_domain_with_finite_tets", "Cover domain with finite tets", false, &S::setCoverDomainWithFiniteTets),
 };
 
-static void refineTopologyDomain(std::vector<CliOption>& options, const OptsMap& opts) {
+namespace Volt::DxaPlugin {
+
+void refineTopologyDomain(std::vector<CliOption>& options, const OptsMap& opts) {
     const auto latticeDir = CLI::getString(opts, "--lattice_dir", "");
     if(latticeDir.empty()){
         return;
@@ -62,7 +65,7 @@ static void refineTopologyDomain(std::vector<CliOption>& options, const OptsMap&
     }
 }
 
-static PluginDescriptor buildDescriptor() {
+PluginDescriptor buildDescriptor() {
     auto meta = optionsMeta(bindings);
     meta.insert(meta.begin(), {"--lattice_dir", "path",
         "Directory containing reference lattice/topology YAMLs", "", {}, "share/volt/lattices"});
@@ -78,9 +81,7 @@ static PluginDescriptor buildDescriptor() {
     return descriptor;
 }
 
-// The lattice YAML's own name for a known topology. A name no YAML knows comes from the upstream contract and is used
-// as given.
-static std::string canonicalTopologyName(const std::string& name){
+std::string canonicalTopologyName(const std::string& name){
     try{
         const auto* topology = crystalTopologyByName(name);
         if(!topology){
@@ -97,7 +98,9 @@ static std::string canonicalTopologyName(const std::string& name){
     }
 }
 
-VOLT_PLUGIN_MAIN(buildDescriptor(),
+}
+
+VOLT_PLUGIN_MAIN(DxaPlugin::buildDescriptor(),
     [](const OptsMap& opts, const LammpsParser::Frame& frame,
        const LammpsParser::Frame*, const std::string& outputBase) -> json {
     if(auto err = requireOptions(opts, {"--reference_topology"})){
@@ -114,7 +117,7 @@ VOLT_PLUGIN_MAIN(buildDescriptor(),
     S analyzer;
     applyAll(analyzer, bindings, opts);
 
-    analyzer.setReferenceTopology(canonicalTopologyName(referenceName));
+    analyzer.setReferenceTopology(DxaPlugin::canonicalTopologyName(referenceName));
 
     try{
         analyzer.compute(frame, outputBase);
