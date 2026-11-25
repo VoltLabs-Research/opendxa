@@ -2,20 +2,19 @@
 
 #include <volt/core/volt.h>
 #include <volt/core/lammps_parser.h>
+#include <volt/pipeline/dislocation_outputs.h>
 
 #include <string>
-#include <string_view>
 #include <utility>
 
 namespace Volt {
 
-struct DislocationOutputs;
+struct ClusterGraphExportPaths;
+class ReconstructedStructureContext;
 
 class DislocationAnalysis{
 public:
-    DislocationAnalysis();
-
-    void compute(const LammpsParser::Frame &frame, const std::string& outputBase = "");
+    void compute(const LammpsParser::Frame& frame, const std::string& outputBase);
 
     void setReferenceTopology(std::string topologyName){
         _referenceTopologyName = std::move(topologyName);
@@ -62,47 +61,47 @@ public:
     }
 
     void setExportDefectMesh(bool exportDefectMesh){
-        _exportDefectMesh = exportDefectMesh;
+        _exports.defectMesh = exportDefectMesh;
     }
 
     void setExportInterfaceMesh(bool exportInterfaceMesh){
-        _exportInterfaceMesh = exportInterfaceMesh;
+        _exports.interfaceMesh = exportInterfaceMesh;
     }
 
     void setExportDelaunayTessellation(bool exportDelaunayTessellation){
-        _exportDelaunayTessellation = exportDelaunayTessellation;
+        _exports.tessellation = exportDelaunayTessellation;
     }
 
     void setExportStructureIdentification(bool exportStructureIdentification){
-        _exportStructureIdentification = exportStructureIdentification;
+        _exports.atoms = exportStructureIdentification;
     }
 
     void setMarkCoreAtoms(bool markCoreAtoms){
-        _markCoreAtoms = markCoreAtoms;
+        _exports.coreAtoms = markCoreAtoms;
     }
 
     void setExportCoherentCrystallineRegions(bool exportCoherentCrystallineRegions){
-        _exportCoherentCrystallineRegions = exportCoherentCrystallineRegions;
+        _exports.coherentRegions = exportCoherentCrystallineRegions;
     }
 
     void setExportDislocations(bool exportDislocations){
-        _exportDislocations = exportDislocations;
+        _exports.dislocations = exportDislocations;
     }
 
     void setExportCircuitInformation(bool exportCircuitInformation){
-        _exportCircuitInformation = exportCircuitInformation;
+        _exports.dislocationTables.exportCircuitInformation = exportCircuitInformation;
     }
 
     void setExportDislocationNetworkStats(bool exportDislocationNetworkStats){
-        _exportDislocationNetworkStats = exportDislocationNetworkStats;
+        _exports.dislocationTables.exportDislocationNetworkStats = exportDislocationNetworkStats;
     }
 
     void setExportJunctions(bool exportJunctions){
-        _exportJunctions = exportJunctions;
+        _exports.dislocationTables.exportJunctions = exportJunctions;
     }
 
     void setClipPbcSegments(bool clipPbcSegments){
-        _clipPbcSegments = clipPbcSegments;
+        _exports.dislocationTables.clipPbcSegments = clipPbcSegments;
     }
 
     void setCoverDomainWithFiniteTets(bool coverDomainWithFiniteTets){
@@ -110,34 +109,30 @@ public:
     }
 
 private:
-    DislocationOutputs outputsFor(const std::string& outputBase) const;
+    static void reconstructStructure(
+        const LammpsParser::Frame& frame,
+        const std::string& neighborLatticePath,
+        const ClusterGraphExportPaths& clusterPaths,
+        StructureAnalysis& structure,
+        ReconstructedStructureContext& context
+    );
+    static void mapElastically(ElasticMapping& elasticMap, int crystalPathSteps);
 
     std::string _referenceTopologyName;
-
-    double _maxTrialCircuitSize;
-    double _circuitStretchability;
-    double _lineSmoothingLevel;
-    double _linePointInterval;
-    double _ghostLayerScale;
-    double _interfaceAlphaScale;
-    int _crystalPathSteps;
-
-    bool _exportDefectMesh;
-    bool _exportInterfaceMesh;
-    bool _exportDelaunayTessellation;
-    bool _exportStructureIdentification;
-    bool _markCoreAtoms;
-    bool _exportCoherentCrystallineRegions;
-    bool _exportDislocations;
-    bool _exportCircuitInformation;
-    bool _exportDislocationNetworkStats;
-    bool _exportJunctions;
-    bool _clipPbcSegments;
-    bool _coverDomainWithFiniteTets;
-
     std::string _clustersTablePath;
     std::string _clusterTransitionsPath;
     std::string _neighborLatticePath;
+
+    double _maxTrialCircuitSize = 14.0;
+    double _circuitStretchability = 9.0;
+    double _lineSmoothingLevel = 1.0;
+    double _linePointInterval = 2.5;
+    double _ghostLayerScale = 3.5;
+    double _interfaceAlphaScale = 5.0;
+    int _crystalPathSteps = 4;
+    bool _coverDomainWithFiniteTets = false;
+
+    DislocationExports _exports;
 };
 
 }

@@ -4,6 +4,8 @@
 #include <volt/utilities/memory_pool.h>
 #include <tbb/spin_mutex.h>
 #include <mutex>
+#include <set>
+#include <vector>
 
 namespace Volt{
 
@@ -300,6 +302,16 @@ public:
 		}
     }
 
+    // Whether every half-edge has its opposite, so the mesh has no hole.
+    [[nodiscard]] bool isClosed() const noexcept{
+        for(const Vertex* vertex : _vertices){
+            for(const Edge* edge = vertex->edges(); edge; edge = edge->nextVertexEdge()){
+                if(!edge->oppositeEdge()) return false;
+            }
+        }
+        return true;
+    }
+
     bool connectOppositeHalfedges(){
         bool closed = true;
         for(Vertex* v1 : _vertices){
@@ -316,6 +328,48 @@ public:
         }
 
         return closed;
+    }
+
+    // Splits every vertex whose faces form more than one fan into one vertex per fan, so that the surface becomes a
+    // manifold. Each new vertex takes the position and the attributes of the vertex it splits off.
+    void makeManifold(){
+        const std::vector<Vertex*> originalVertices = _vertices;
+        for(Vertex* vertex : originalVertices){
+            if(vertex->numEdges() < 3) continue;
+
+            std::set<Edge*> visitedEdges;
+            Edge* startEdge = vertex->edges();
+            Edge* currentEdge = startEdge;
+            do{
+                visitedEdges.insert(currentEdge);
+                currentEdge = currentEdge->oppositeEdge()->nextFaceEdge();
+            }while(currentEdge != startEdge);
+
+            while(visitedEdges.size() < vertex->numEdges()){
+                Vertex* newVertex = createVertex(vertex->pos());
+                static_cast<VertexBase&>(*newVertex) = static_cast<const VertexBase&>(*vertex);
+                Edge* fanStartEdge = nullptr;
+                for(Edge* e = vertex->edges(); e != nullptr; e = e->nextVertexEdge()){
+                    if(visitedEdges.find(e) == visitedEdges.end()){
+                        fanStartEdge = e;
+                        break;
+                    }
+                }
+                if(fanStartEdge == nullptr) break;
+
+                std::vector<Edge*> fanToTransfer;
+                currentEdge = fanStartEdge;
+                do{
+                    fanToTransfer.push_back(currentEdge);
+                    visitedEdges.insert(currentEdge);
+                    currentEdge = currentEdge->oppositeEdge()->nextFaceEdge();
+                }while(currentEdge != fanStartEdge);
+
+                for(Edge* edgeToMove : fanToTransfer){
+                    vertex->transferEdgeToVertex(edgeToMove, newVertex);
+                }
+            }
+        }
     }
 
 private:

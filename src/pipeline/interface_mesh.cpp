@@ -5,50 +5,8 @@
 #include <array>
 #include <numeric>
 #include <cassert>
-#include <set>
 
 namespace Volt{
-
-void InterfaceMesh::makeManifold(){
-    auto original_vertices = vertices(); 
-
-    for(auto* vertex : original_vertices){
-        if(vertex->numEdges() < 3) continue;
-
-        std::set<Edge*> visited_edges;
-        Edge* start_edge = vertex->edges();
-        Edge* current_edge = start_edge;
-        do{
-            visited_edges.insert(current_edge);
-            current_edge = current_edge->oppositeEdge()->nextFaceEdge();
-        }while(current_edge != start_edge);
-
-        while(visited_edges.size() < vertex->numEdges()){
-            Vertex* new_vertex = createVertex(vertex->pos());
-            Edge* fan_start_edge = nullptr;
-            for(Edge* e = vertex->edges(); e != nullptr; e = e->nextVertexEdge()){
-                if(visited_edges.find(e) == visited_edges.end()){
-                    fan_start_edge = e;
-                    break;
-                }
-            }
-            
-            if(fan_start_edge == nullptr) break;
-
-            std::vector<Edge*> fan_to_transfer;
-            current_edge = fan_start_edge;
-            do{
-                fan_to_transfer.push_back(current_edge);
-                visited_edges.insert(current_edge);
-                current_edge = current_edge->oppositeEdge()->nextFaceEdge();
-            }while(current_edge != fan_start_edge);
-
-            for(Edge* edge_to_move : fan_to_transfer){
-                vertex->transferEdgeToVertex(edge_to_move, new_vertex);
-            }
-        }
-    }
-}
 
 void InterfaceMesh::createMesh(double maxNeighborDist, double alphaScale){
     _isCompletelyGood = true;
@@ -102,10 +60,8 @@ void InterfaceMesh::createMesh(double maxNeighborDist, double alphaScale){
     makeManifold();
 }
 
-namespace{
-
 // Links the copy of an interface edge to the copy of the edge's opposite, when the opposite's face was kept too.
-void linkCopiedOpposite(
+void InterfaceMesh::linkCopiedOpposite(
     const InterfaceMeshTopology::Edge* edge,
     InterfaceMeshTopology::Edge* copy,
     const std::vector<InterfaceMeshTopology::Face*>& faceMap
@@ -125,9 +81,7 @@ void linkCopiedOpposite(
     }while(candidate != oppositeCopy->edges());
 }
 
-}
-
-bool InterfaceMesh::generateDefectMesh(
+void InterfaceMesh::generateDefectMesh(
     BurgersLoopBuilder const& tracer,
     InterfaceMeshTopology& outMesh
 ) const{
@@ -187,7 +141,7 @@ bool InterfaceMesh::generateDefectMesh(
         }
     }
 
-    return outMesh.connectOppositeHalfedges();
+    outMesh.connectOppositeHalfedges();
 }
 
 }

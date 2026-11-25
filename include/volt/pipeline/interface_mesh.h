@@ -4,6 +4,7 @@
 #include <volt/helpers/half_edge_mesh.h>
 #include <volt/pipeline/elastic_mapping.h>
 #include <atomic>
+#include <vector>
 
 namespace Volt{
 
@@ -47,8 +48,6 @@ public:
 		return elasticMapping().tessellation();
 	}
 
-    void makeManifold();
-
     [[nodiscard]] StructureAnalysis const& structureAnalysis() const noexcept{
         return elasticMapping().structureAnalysis();
     }
@@ -63,9 +62,15 @@ public:
 		return _isCompletelyBad.load();
 	}
 
-    [[nodiscard]] bool generateDefectMesh(BurgersLoopBuilder const& tracer, InterfaceMeshTopology& defectMesh) const;
+    void generateDefectMesh(BurgersLoopBuilder const& tracer, InterfaceMeshTopology& defectMesh) const;
 
 private:
+    static void linkCopiedOpposite(
+        const InterfaceMeshTopology::Edge* edge,
+        InterfaceMeshTopology::Edge* copy,
+        const std::vector<InterfaceMeshTopology::Face*>& faceMap
+    );
+
     ElasticMapping& _elasticMapping;
     std::atomic<bool> _isCompletelyGood{true};
     std::atomic<bool> _isCompletelyBad{true};

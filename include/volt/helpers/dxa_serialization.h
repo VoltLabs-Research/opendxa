@@ -2,7 +2,6 @@
 
 #include <nlohmann/json.hpp>
 
-#include <optional>
 #include <vector>
 
 #include <volt/helpers/dislocation_network.h>
@@ -37,22 +36,14 @@ void streamDislocationsToFile(
     const std::string& linesFilePath,
     const std::string& summaryFilePath,
     const DislocationNetwork& network,
-    const SimulationCell& simulationCell,
-    const DislocationsExportOptions& options,
-    const StructureAnalysis& structureAnalysis
-);
-
-struct InterfaceMeshFlags{
-    bool isCompletelyGood;
-    bool isCompletelyBad;
-};
-
-void streamMeshToFile(
-    const std::string& filePath,
-    const InterfaceMeshTopology& mesh,
     const StructureAnalysis& structureAnalysis,
-    const std::optional<InterfaceMeshFlags>& interfaceFlags = std::nullopt
+    const DislocationsExportOptions& options
 );
+
+void streamMeshToFile(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell);
+
+// The mesh, plus whether every tetrahedron of the tessellation was elastically compatible or none was.
+void streamInterfaceMeshToFile(const std::string& filePath, const InterfaceMesh& interfaceMesh);
 
 void streamDelaunayTessellationToFile(
     const std::string& filePath,

@@ -1,5 +1,7 @@
 #include <utility>
 #include <volt/helpers/dxa_serialization.h>
+#include <volt/helpers/dxa_serialization_detail.h>
+#include <volt/helpers/dxa_serialization_log.h>
 #include <volt/helpers/burgers_circuit.h>
 #include <volt/helpers/edge_key.h>
 #include <volt/structures/crystal_structure_types.h>
@@ -17,15 +19,14 @@
 #include <volt/utilities/json_utils.h>
 #include <volt/utilities/parquet_line_writer.h>
 #include <volt/utilities/parquet_mesh_writer.h>
-#include <spdlog/spdlog.h>
 #include <filesystem>
 #include <fstream>
 
 namespace Volt::DxaSerialization {
 
-namespace {
+using namespace Detail;
 
-constexpr const char* kParquetSourceKey = "__parquet_source__";
+namespace Detail {
 
 Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
     if(burgersVector.cluster() == nullptr){
@@ -41,11 +42,6 @@ std::string burgersVectorLabel(const Vector3& vector){
 }
 
 const BurgersFamily OTHER_BURGERS_FAMILY{"Other", "Other"};
-
-struct CubicBurgersFamily{
-    std::array<double, 3> sortedAbsComponents;
-    BurgersFamily family;
-};
 
 const CubicBurgersFamily FCC_BURGERS_FAMILIES[] = {
     {{0.5, 0.5, 0.0}, {"1/2<110>", "1/2<110> (Perfect)"}},
@@ -66,19 +62,6 @@ const CubicBurgersFamily SC_BURGERS_FAMILIES[] = {
     {{1.0, 1.0, 0.0}, {"<110>", "<110>"}},
     {{1.0, 1.0, 1.0}, {"<111>", "<111>"}}
 };
-
-struct HexagonalBurgersFamily{
-    double basalLength;
-    double axialLength;
-    BurgersFamily family;
-};
-
-// HCP lengths in the units of the local Burgers vectors, where the nearest-neighbour distance is a = 1/√2 and
-// c/a takes its ideal value √(8/3).
-constexpr double kHcpA = 0.7071067811865476;         // 1/√2
-constexpr double kHcpShockley = 0.4082482904638630;  // a/√3
-constexpr double kHcpC = 1.1547005383792515;         // a·√(8/3)
-constexpr double kHcpHalfC = 0.5773502691896257;     // c/2
 
 const HexagonalBurgersFamily HCP_BURGERS_FAMILIES[] = {
     {kHcpA, 0.0, {"1/3<1-210>", "1/3<1-210> (Perfect basal)"}},
@@ -137,10 +120,6 @@ std::array<std::uint64_t, 3> canonicalFaceKey(const std::array<DelaunayTessellat
     std::sort(key.begin(), key.end());
     return key;
 }
-
-// Past this many periodic crossings within one segment, the rest of it is kept as it is.
-constexpr int kMaxCrossingsPerSegment = 10;
-constexpr double kCrossingEpsilon = 1e-9;
 
 }
 
@@ -342,7 +321,7 @@ void streamCoherentCrystallineRegionsToFile(
     JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
-namespace {
+namespace Detail {
 
 std::array<const DislocationNode*, 2> endNodes(const DislocationSegment& segment){
     return {&segment.forwardNode(), &segment.backwardNode()};
@@ -458,40 +437,7 @@ BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::stri
     }
 }
 
-namespace {
-
-// What every piece of a dislocation segment shares, computed once per segment.
-struct SegmentProperties{
-    Vector3 burgersLocal;
-    Vector3 burgersGlobal;
-    double magnitude;
-    int clusterId;
-    int segmentId;
-    std::string crystalStructure;
-    BurgersFamily family;
-};
-
-struct DislocationLine{
-    std::vector<Point3> points;
-    double length;
-    SegmentProperties segment;
-};
-
-struct FamilyTally{
-    std::string label;
-    int segmentCount = 0;
-    double totalLength = 0.0;
-};
-
-struct LineSummary{
-    double totalLength = 0;
-    int totalPoints = 0;
-    double minLength = 0;
-    double meanLength = 0;
-    double maxLength = 0;
-    std::map<std::string, FamilyTally> byBurgersVector;
-    std::map<std::string, FamilyTally> byFamily;
-};
+namespace Detail {
 
 std::vector<const DislocationSegment*> nonDegenerateSegments(const DislocationNetwork& network){
     std::vector<const DislocationSegment*> segments;
@@ -520,14 +466,6 @@ SegmentProperties segmentProperties(const DislocationSegment& segment){
     properties.crystalStructure = crystalStructureOf(cluster);
     properties.family = classifyBurgersFamily(properties.burgersLocal, properties.crystalStructure);
     return properties;
-}
-
-double polylineLength(const std::vector<Point3>& points){
-    double length = 0;
-    for(size_t i = 1; i < points.size(); ++i){
-        length += (points[i] - points[i - 1]).length();
-    }
-    return length;
 }
 
 std::vector<DislocationLine> collectLines(
@@ -566,8 +504,11 @@ void addToTally(FamilyTally& tally, double length){
     tally.totalLength += length;
 }
 
-LineSummary summarizeLines(const std::vector<DislocationLine>& lines){
+LineSummary summarizeLines(const std::vector<DislocationLine>& lines, std::size_t skippedSegments, bool clipped){
     LineSummary summary;
+    summary.skippedSegments = skippedSegments;
+    summary.lineCount = lines.size();
+    summary.clipped = clipped;
     double minLength = std::numeric_limits<double>::max();
     for(const DislocationLine& line : lines){
         summary.totalLength += line.length;
@@ -582,26 +523,6 @@ LineSummary summarizeLines(const std::vector<DislocationLine>& lines){
     summary.minLength = lines.empty() ? 0 : minLength;
     summary.meanLength = lines.empty() ? 0.0 : summary.totalLength / lines.size();
     return summary;
-}
-
-void logLineSummary(std::size_t skippedSegments, std::size_t lineCount, const LineSummary& summary, bool clipped){
-    if(skippedSegments > 0){
-        spdlog::info("  Skipped {} degenerate segments (fewer than two points)", skippedSegments);
-    }
-    spdlog::info(
-        "  {} dislocation lines{} ({} points), length min {:.2f} / mean {:.2f} / max {:.2f}",
-        lineCount, clipped ? " after PBC clipping" : "", summary.totalPoints,
-        summary.minLength, summary.meanLength, summary.maxLength
-    );
-    if(summary.byFamily.empty()) return;
-
-    std::string families;
-    for(const auto& [_, tally] : summary.byFamily){
-        if(!families.empty()) families += ", ";
-        families += spdlog::fmt_lib::format("{} {} ({:.1f}%)", tally.label, tally.segmentCount,
-            summary.totalLength > 0 ? 100.0 * tally.totalLength / summary.totalLength : 0.0);
-    }
-    spdlog::info("  Burgers vector families (lines, % of length): {}", families);
 }
 
 void writeLinesTable(const std::string& filePath, const std::vector<DislocationLine>& lines){
@@ -713,14 +634,17 @@ void streamDislocationsToFile(
     const std::string& linesFilePath,
     const std::string& summaryFilePath,
     const DislocationNetwork& network,
-    const SimulationCell& simulationCell,
-    const DislocationsExportOptions& options,
-    const StructureAnalysis& structureAnalysis
+    const StructureAnalysis& structureAnalysis,
+    const DislocationsExportOptions& options
 ){
+    DxaSerializationLog log;
+    const SimulationCell& simulationCell = structureAnalysis.context().simCell;
     const std::vector<const DislocationSegment*> segments = nonDegenerateSegments(network);
     const std::vector<DislocationLine> lines = collectLines(segments, simulationCell, options.clipPbcSegments);
-    const LineSummary summary = summarizeLines(lines);
-    logLineSummary(network.segments().size() - segments.size(), lines.size(), summary, options.clipPbcSegments);
+    const LineSummary summary = summarizeLines(
+        lines, network.segments().size() - segments.size(), options.clipPbcSegments
+    );
+    log.dump(summary);
     writeLinesTable(linesFilePath, lines);
 
     json doc;
@@ -732,48 +656,7 @@ void streamDislocationsToFile(
     JsonUtils::writeJsonToParquet(doc, summaryFilePath);
 }
 
-namespace {
-
-// How far a corner may move when its face is unwrapped and still count as the same vertex.
-constexpr double kUnwrapTolerance = 1e-6;
-
-struct UnwrappedMesh{
-    std::vector<Point3> points;
-    std::vector<std::array<int, 3>> faces;
-};
-
-// A face that straddles a periodic boundary is unwrapped, and each corner that moves gets a vertex of its own, so
-// that every face can be drawn as one triangle. Vertex i of the mesh stays point i.
-UnwrappedMesh unwrapFaces(const InterfaceMeshTopology& mesh, const SimulationCell& cell){
-    const auto& vertices = mesh.vertices();
-    UnwrappedMesh unwrapped;
-    unwrapped.points.reserve(vertices.size());
-    for(const auto* vertex : vertices){
-        unwrapped.points.push_back(vertex->pos());
-    }
-
-    unwrapped.faces.reserve(mesh.faces().size());
-    for(const auto* face : mesh.faces()){
-        if(!face || !face->edges()) continue;
-        std::array<int, 3> corners{};
-        std::array<Point3, 3> positions{};
-        auto* edge = face->edges();
-        for(int i = 0; i < 3; ++i, edge = edge->nextFaceEdge()){
-            corners[i] = edge->vertex1()->index();
-            positions[i] = edge->vertex1()->pos();
-        }
-
-        cell.unwrapPositions(positions.data(), 3);
-
-        for(int i = 0; i < 3; ++i){
-            if(vertices[corners[i]]->pos().equals(positions[i], kUnwrapTolerance)) continue;
-            corners[i] = static_cast<int>(unwrapped.points.size());
-            unwrapped.points.push_back(positions[i]);
-        }
-        unwrapped.faces.push_back(corners);
-    }
-    return unwrapped;
-}
+namespace Detail {
 
 std::string withoutParquetExtension(const std::string& filePath){
     constexpr std::string_view extension = ".parquet";
@@ -811,15 +694,8 @@ std::int64_t eulerCharacteristic(const InterfaceMeshTopology& mesh){
         + static_cast<int64_t>(mesh.faces().size());
 }
 
-}
-
-void streamMeshToFile(
-    const std::string& filePath,
-    const InterfaceMeshTopology& mesh,
-    const StructureAnalysis& structureAnalysis,
-    const std::optional<InterfaceMeshFlags>& interfaceFlags
-){
-    const SimulationCell& cell = structureAnalysis.context().simCell;
+// Writes the vertex and facet tables next to filePath, and returns the document that points to them.
+json writeMeshTables(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell){
     const UnwrappedMesh unwrapped = unwrapFaces(mesh, cell);
 
     const std::string basePath = withoutParquetExtension(filePath);
@@ -840,11 +716,19 @@ void streamMeshToFile(
     doc["topology"] = {
         {"euler_characteristic", eulerCharacteristic(mesh)}
     };
-    if(interfaceFlags){
-        doc["topology"]["is_completely_good"] = interfaceFlags->isCompletelyGood;
-        doc["topology"]["is_completely_bad"] = interfaceFlags->isCompletelyBad;
-    }
+    return doc;
+}
 
+}
+
+void streamMeshToFile(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell){
+    JsonUtils::writeJsonToParquet(writeMeshTables(filePath, mesh, cell), filePath);
+}
+
+void streamInterfaceMeshToFile(const std::string& filePath, const InterfaceMesh& interfaceMesh){
+    json doc = writeMeshTables(filePath, interfaceMesh, interfaceMesh.structureAnalysis().context().simCell);
+    doc["topology"]["is_completely_good"] = interfaceMesh.isCompletelyGood();
+    doc["topology"]["is_completely_bad"] = interfaceMesh.isCompletelyBad();
     JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
