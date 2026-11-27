@@ -46,7 +46,7 @@ void DislocationOutputs::writeCoreAtoms(
                     : static_cast<int>(StructureType::OTHER)
             ));
         },
-        [&coreAtoms, &dislocationIds](ColumnarAtomWriter& writer, std::size_t atomIndex){
+        [&coreAtoms, &dislocationIds](ColumnarRowWriter& writer, std::size_t atomIndex){
             writer.field("dislocation_id", dislocationIds[coreAtoms[atomIndex]]);
         }
     );

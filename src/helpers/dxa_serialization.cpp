@@ -3,6 +3,7 @@
 #include <volt/helpers/dxa_serialization_log.h>
 #include <volt/helpers/burgers_circuit.h>
 #include <volt/helpers/edge_key.h>
+#include <volt/analysis/structure_identification_export.h>
 #include <volt/structures/crystal_structure_types.h>
 #include <volt/utilities/json_utils.h>
 #include <volt/utilities/parquet_line_writer.h>
@@ -10,10 +11,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
 #include <limits>
 #include <numeric>
-#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -126,7 +125,9 @@ void streamDislocationsToFile(
     doc["export"]["ChartExporter"] = burgersVectorChart(summary);
     json& listings = doc["sub_listings"];
     listings["burgers_families"] = burgersFamilyRows(summary);
-    listings["structure_counts"] = structureCountRows(context);
+    listings["structure_counts"] = StructureIdentificationExport::structureCountRows(
+        structureCounts(context), context.atomCount()
+    );
     if(options.exportDislocationNetworkStats)
         listings["network_statistics"] = networkStatisticsRows(network, segments, context.simCell.volume3D());
     if(options.exportCircuitInformation)
@@ -137,11 +138,11 @@ void streamDislocationsToFile(
 }
 
 void streamMeshToFile(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell){
-    JsonUtils::writeJsonToParquet(writeMeshTables(filePath, mesh, cell), filePath);
+    JsonUtils::writeJsonToParquet(meshDocument(filePath, mesh, cell), filePath);
 }
 
 void streamInterfaceMeshToFile(const std::string& filePath, const InterfaceMesh& interfaceMesh){
-    json doc = writeMeshTables(filePath, interfaceMesh, interfaceMesh.structureAnalysis().context().simCell);
+    json doc = meshDocument(filePath, interfaceMesh, interfaceMesh.structureAnalysis().context().simCell);
     doc["topology"]["is_completely_good"] = interfaceMesh.isCompletelyGood();
     doc["topology"]["is_completely_bad"] = interfaceMesh.isCompletelyBad();
     JsonUtils::writeJsonToParquet(doc, filePath);
@@ -167,28 +168,24 @@ void streamDelaunayTessellationToFile(const std::string& filePath, const Delauna
             if(!isBoundary && neighbor < cell) continue;
             isBoundary ? ++boundaryFacets : ++internalFacets;
 
-            json corners = json::array();
+            std::array<int, 3> corners{};
             for(int corner = 0; corner < 3; ++corner){
                 const auto vertex = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, corner));
                 const auto [it, inserted] = pointOfVertex.emplace(vertex, static_cast<int>(points.size()));
                 if(inserted){
-                    const Point3 position = tessellation.vertexPosition(vertex);
-                    points.push_back({
-                        {"index", static_cast<std::int64_t>(it->second)},
-                        {"position", {position.x(), position.y(), position.z()}}
-                    });
+                    points.push_back({{"index", it->second}, {"position", tessellation.vertexPosition(vertex)}});
                 }
-                corners.push_back(it->second);
+                corners[corner] = it->second;
             }
-            facets.push_back({{"vertices", std::move(corners)}});
+            facets.push_back({{"vertices", corners}});
         }
     }
 
     json doc;
     doc["main_listing"] = {
         {"total_primary_tetrahedra", primaryTetrahedra},
-        {"total_nodes", static_cast<std::int64_t>(points.size())},
-        {"total_facets", static_cast<std::int64_t>(facets.size())},
+        {"total_nodes", points.size()},
+        {"total_facets", facets.size()},
         {"boundary_facets", boundaryFacets},
         {"internal_facets", internalFacets}
     };
@@ -212,18 +209,18 @@ void streamCoherentCrystallineRegionsToFile(
         atomIndicesByCluster[clusterId].push_back(i);
     }
 
-    int largestRegionSize = 0;
+    std::size_t largestRegionSize = 0;
     json regions = json::array();
     json atomisticExporter = json::object();
     for(const auto& [clusterId, atomIndices] : atomIndicesByCluster){
-        largestRegionSize = std::max(largestRegionSize, static_cast<int>(atomIndices.size()));
+        largestRegionSize = std::max(largestRegionSize, atomIndices.size());
         const int stype = structureTypeOf(context, atomIndices.front());
         const Cluster* cluster = structureAnalysis.clusterGraph().findCluster(clusterId);
         const std::string clusterName = "Cluster " + std::to_string(clusterId);
         regions.push_back({
             {"cluster_id", clusterId},
             {"cluster_name", clusterName},
-            {"atom_count", static_cast<int64_t>(atomIndices.size())},
+            {"atom_count", atomIndices.size()},
             {"structure_id", stype},
             {"structure_name", structureTypeName(stype)},
             {"topology_name", cluster ? cluster->topologyName : std::string()}
@@ -232,10 +229,9 @@ void streamCoherentCrystallineRegionsToFile(
         json atoms = json::array();
         for(std::size_t atomIndex : atomIndices){
             const int astype = structureTypeOf(context, atomIndex);
-            const auto& pos = atomIndex < frame.positions.size() ? frame.positions[atomIndex] : Point3::Origin();
             atoms.push_back({
                 {"id", atomIndex < frame.ids.size() ? frame.ids[atomIndex] : static_cast<int>(atomIndex)},
-                {"pos", {pos.x(), pos.y(), pos.z()}},
+                {"pos", atomIndex < frame.positions.size() ? frame.positions[atomIndex] : Point3::Origin()},
                 {"structure_id", astype},
                 {"structure_name", structureTypeName(astype)},
                 {"cluster_id", clusterId}
@@ -246,8 +242,8 @@ void streamCoherentCrystallineRegionsToFile(
 
     json doc;
     doc["main_listing"] = {
-        {"total_atoms", static_cast<int64_t>(context.atomCount())},
-        {"coherent_region_count", static_cast<int64_t>(atomIndicesByCluster.size())},
+        {"total_atoms", context.atomCount()},
+        {"coherent_region_count", atomIndicesByCluster.size()},
         {"assigned_atoms", static_cast<int>(context.atomCount()) - unassignedAtoms},
         {"unassigned_atoms", unassignedAtoms},
         {"largest_region_size", largestRegionSize}
@@ -335,15 +331,19 @@ std::string crystalStructureOf(const Cluster* cluster){
     return !cluster->topologyName.empty() ? cluster->topologyName : std::string(structureTypeName(cluster->structure));
 }
 
-SegmentProperties segmentProperties(const DislocationSegment& segment){
-    const Cluster* cluster = segment.burgersVector.cluster();
+SegmentProperties segmentProperties(
+    const ClusterVector& burgersVector,
+    std::string crystalStructure,
+    int clusterId,
+    int segmentId
+){
     SegmentProperties properties;
-    properties.burgersLocal = segment.burgersVector.localVec();
-    properties.burgersGlobal = getGlobalBurgersVector(segment.burgersVector);
+    properties.burgersLocal = burgersVector.localVec();
+    properties.burgersGlobal = getGlobalBurgersVector(burgersVector);
     properties.magnitude = properties.burgersLocal.length();
-    properties.clusterId = cluster ? cluster->id : 0;
-    properties.segmentId = segment.id;
-    properties.crystalStructure = crystalStructureOf(cluster);
+    properties.clusterId = clusterId;
+    properties.segmentId = segmentId;
+    properties.crystalStructure = std::move(crystalStructure);
     properties.family = classifyBurgersFamily(properties.burgersLocal, properties.crystalStructure);
     return properties;
 }
@@ -356,7 +356,10 @@ std::vector<DislocationLine> collectLines(
     std::vector<DislocationLine> lines;
     lines.reserve(segments.size() * 2);
     for(const DislocationSegment* segment : segments){
-        const SegmentProperties properties = segmentProperties(*segment);
+        const Cluster* cluster = segment->burgersVector.cluster();
+        const SegmentProperties properties = segmentProperties(
+            segment->burgersVector, crystalStructureOf(cluster), cluster ? cluster->id : 0, segment->id
+        );
         auto addLine = [&](std::vector<Point3> points){
             const double length = polylineLength(points);
             lines.push_back({std::move(points), length, properties});
@@ -397,35 +400,32 @@ LineSummary summarizeLines(const std::vector<DislocationLine>& lines, std::size_
     return summary;
 }
 
+void writeBurgersColumns(ColumnarRowWriter& writer, const DislocationLine& line){
+    const SegmentProperties& segment = line.segment;
+    writer.field("length", line.length);
+    writer.field("num_points", line.points.size());
+    writer.field("magnitude", segment.magnitude);
+    writer.field("burgers_vector_local", segment.burgersLocal);
+    writer.field("burgers_vector_global", segment.burgersGlobal);
+    writer.field("crystal_structure", segment.crystalStructure);
+    writer.field("burgers_family", segment.family.name);
+    writer.field("burgers_family_label", segment.family.label);
+    writer.field("cluster_id", segment.clusterId);
+}
+
 void writeLinesTable(const std::string& filePath, const std::vector<DislocationLine>& lines){
-    const auto xyz = [](const auto& v){ return std::vector<double>{v.x(), v.y(), v.z()}; };
-    streamLinesToParquet(
-        filePath,
-        lines.size(),
-        [&](std::size_t i, std::vector<Point3>& outPoints){ outPoints = lines[i].points; },
-        [&](ColumnarLineWriter& writer, std::size_t i){
-            const DislocationLine& line = lines[i];
-            const SegmentProperties& segment = line.segment;
-            writer.field("length", line.length);
-            writer.field("num_points", static_cast<std::int64_t>(line.points.size()));
-            writer.field("magnitude", segment.magnitude);
-            writer.field("burgers_vector_local", xyz(segment.burgersLocal));
-            writer.field("burgers_vector_global", xyz(segment.burgersGlobal));
-            writer.field("crystal_structure", segment.crystalStructure);
-            writer.field("burgers_family", segment.family.name);
-            writer.field("burgers_family_label", segment.family.label);
-            writer.field("cluster_id", static_cast<std::int64_t>(segment.clusterId));
-            writer.field("segment_id", static_cast<std::int64_t>(segment.segmentId));
-            writer.field("head_vertex", xyz(line.points.front()));
-            writer.field("tail_vertex", xyz(line.points.back()));
-        }
-    );
+    streamLinesToParquet(filePath, lines, &DislocationLine::points, [](ColumnarRowWriter& writer, const DislocationLine& line){
+        writeBurgersColumns(writer, line);
+        writer.field("segment_id", line.segment.segmentId);
+        writer.field("head_vertex", line.points.front());
+        writer.field("tail_vertex", line.points.back());
+    });
 }
 
 json lineListing(const LineSummary& summary){
     return {
-        {"dislocations", static_cast<int64_t>(summary.lineCount)},
-        {"total_points", static_cast<int64_t>(summary.totalPoints)},
+        {"dislocations", summary.lineCount},
+        {"total_points", summary.totalPoints},
         {"average_segment_length", summary.meanLength},
         {"max_segment_length", summary.maxLength},
         {"min_segment_length", summary.minLength},
@@ -452,7 +452,7 @@ json burgersFamilyRows(const LineSummary& summary){
         rows.push_back({
             {"burgers_family", familyName},
             {"burgers_family_label", tally.label},
-            {"segment_count", static_cast<int64_t>(tally.segmentCount)},
+            {"segment_count", tally.segmentCount},
             {"total_length", tally.totalLength},
             {"length_fraction", summary.totalLength > 0 ? tally.totalLength / summary.totalLength : 0.0}
         });
@@ -460,24 +460,12 @@ json burgersFamilyRows(const LineSummary& summary){
     return rows;
 }
 
-json structureCountRows(const StructureContext& context){
-    const std::size_t atomCount = context.atomCount();
-    std::map<int, std::int64_t> structureCounts;
-    for(std::size_t atomIndex = 0; atomIndex < atomCount; ++atomIndex){
-        structureCounts[structureTypeOf(context, atomIndex)]++;
+std::map<int, int> structureCounts(const StructureContext& context){
+    std::map<int, int> counts;
+    for(std::size_t atomIndex = 0; atomIndex < context.atomCount(); ++atomIndex){
+        counts[structureTypeOf(context, atomIndex)]++;
     }
-
-    const double atomsForFraction = atomCount > 0 ? static_cast<double>(atomCount) : 1.0;
-    json rows = json::array();
-    for(const auto& [structureType, count] : structureCounts){
-        rows.push_back({
-            {"structure_id", structureType},
-            {"structure_name", structureTypeName(structureType)},
-            {"count", count},
-            {"fraction", static_cast<double>(count) / atomsForFraction}
-        });
-    }
-    return rows;
+    return counts;
 }
 
 json networkStatisticsRows(
@@ -490,7 +478,7 @@ json networkStatisticsRows(
     for(const DislocationSegment* segment : segments){
         totalLength += segment->calculateLength();
     }
-    const int segmentCount = static_cast<int>(segments.size());
+    const std::size_t segmentCount = segments.size();
     const auto danglingSegments = std::ranges::count_if(network.segments(), [](const DislocationSegment* segment){
         return segment && (segment->forwardNode().isDangling() || segment->backwardNode().isDangling());
     });
@@ -498,11 +486,11 @@ json networkStatisticsRows(
     return json::array({json{
         {"total_network_length", totalLength},
         {"segment_count", segmentCount},
-        {"junction_count", static_cast<int>(network.junctionArmCounts().size())},
-        {"dangling_segments", static_cast<int>(danglingSegments)},
+        {"junction_count", network.junctionArmCounts().size()},
+        {"dangling_segments", danglingSegments},
         {"average_segment_length", segmentCount > 0 ? totalLength / segmentCount : 0.0},
         {"density", cellVolume > 0 ? totalLength / cellVolume : 0.0},
-        {"total_segments_including_degenerate", static_cast<int>(network.segments().size())}
+        {"total_segments_including_degenerate", network.segments().size()}
     }});
 }
 
@@ -526,7 +514,7 @@ json circuitRows(const DislocationNetwork& network){
         : std::accumulate(edgeCounts.begin(), edgeCounts.end(), 0.0) / edgeCounts.size();
 
     return json::array({json{
-        {"total_circuits", static_cast<int>(edgeCounts.size())},
+        {"total_circuits", edgeCounts.size()},
         {"dangling_circuits", danglingCircuits},
         {"blocked_circuits", blockedCircuits},
         {"average_edge_count", averageEdgeCount},
@@ -549,7 +537,7 @@ json junctionRows(const DislocationNetwork& network){
         rows.push_back({
             {"junction_arms", arms},
             {"junction_count", count},
-            {"total_junctions", static_cast<int>(junctionArms.size())}
+            {"total_junctions", junctionArms.size()}
         });
     }
     return rows;
@@ -559,19 +547,6 @@ int structureTypeOf(const StructureContext& context, std::size_t atomIndex){
     return context.structureTypes
         ? context.structureTypes->getInt(atomIndex)
         : static_cast<int>(StructureType::OTHER);
-}
-
-json cellJson(const SimulationCell& cell){
-    const auto column = [&](int i){
-        const Vector3 v = cell.matrix().column(i);
-        return json{v.x(), v.y(), v.z()};
-    };
-    const auto& pbc = cell.pbcFlags();
-    return {
-        {"matrix", {column(0), column(1), column(2)}},
-        {"origin", column(3)},
-        {"pbc", {pbc[0], pbc[1], pbc[2]}}
-    };
 }
 
 // V - E + F of the mesh as it is, counting each undirected edge once.
@@ -591,27 +566,9 @@ std::int64_t eulerCharacteristic(const InterfaceMeshTopology& mesh){
         + static_cast<int64_t>(mesh.faces().size());
 }
 
-json writeMeshTables(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell){
+json meshDocument(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell){
     const UnwrappedMesh unwrapped = unwrapFaces(mesh, cell);
-
-    constexpr std::string_view extension = ".parquet";
-    const std::string basePath = filePath.ends_with(extension)
-        ? filePath.substr(0, filePath.size() - extension.size())
-        : filePath;
-    const std::string verticesPath = basePath + ".vertices.parquet";
-    const std::string facetsPath = basePath + ".facets.parquet";
-    streamMeshTablesToParquet(verticesPath, facetsPath, unwrapped.points, unwrapped.faces);
-
-    json doc;
-    doc["main_listing"] = {
-        {"total_nodes", static_cast<int64_t>(unwrapped.points.size())},
-        {"total_facets", static_cast<int64_t>(unwrapped.faces.size())}
-    };
-    doc["export"]["MeshExporter"][kParquetSourceKey] = {
-        {"vertices", std::filesystem::path(verticesPath).filename().string()},
-        {"facets", std::filesystem::path(facetsPath).filename().string()},
-        {"cell", cellJson(cell)}
-    };
+    json doc = writeMeshTables(filePath, unwrapped.points, unwrapped.faces, cell);
     doc["topology"] = {
         {"euler_characteristic", eulerCharacteristic(mesh)}
     };

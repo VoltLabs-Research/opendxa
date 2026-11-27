@@ -2,6 +2,7 @@
 
 #include <volt/helpers/dxa_serialization.h>
 #include <volt/structures/crystal_structure_types.h>
+#include <volt/utilities/columnar_row_writer.h>
 
 #include <array>
 #include <cstddef>
@@ -14,8 +15,6 @@
 // What the serializer builds its files from. LineReconstructionDXA writes its lines and its interface mesh with some
 // of it too: polylineLength, getGlobalBurgersVector and unwrapFaces.
 namespace Volt::DxaSerialization::Detail {
-
-inline constexpr const char* kParquetSourceKey = "__parquet_source__";
 
 // Past this many periodic crossings within one segment, the rest of it is kept as it is.
 inline constexpr int kMaxCrossingsPerSegment = 10;
@@ -86,7 +85,12 @@ struct LineSummary{
 
 std::vector<const DislocationSegment*> nonDegenerateSegments(const DislocationNetwork& network);
 std::string crystalStructureOf(const Cluster* cluster);
-SegmentProperties segmentProperties(const DislocationSegment& segment);
+SegmentProperties segmentProperties(
+    const ClusterVector& burgersVector,
+    std::string crystalStructure,
+    int clusterId,
+    int segmentId
+);
 
 // Inline so that collectLines inlines it: an out-of-line copy rounds some lengths one ulp differently.
 inline double polylineLength(const std::vector<Point3>& points){
@@ -104,12 +108,15 @@ std::vector<DislocationLine> collectLines(
 );
 std::string burgersChartKey(const SegmentProperties& segment);
 LineSummary summarizeLines(const std::vector<DislocationLine>& lines, std::size_t skippedSegments, bool clipped);
+// The columns every dislocation line table starts with, LineReconstructionDXA's too: the line's length and point
+// count, then its Burgers vector, crystal, family and cluster.
+void writeBurgersColumns(ColumnarRowWriter& writer, const DislocationLine& line);
 void writeLinesTable(const std::string& filePath, const std::vector<DislocationLine>& lines);
 
 json lineListing(const LineSummary& summary);
 json burgersVectorChart(const LineSummary& summary);
 json burgersFamilyRows(const LineSummary& summary);
-json structureCountRows(const StructureContext& context);
+std::map<int, int> structureCounts(const StructureContext& context);
 json networkStatisticsRows(
     const DislocationNetwork& network,
     const std::vector<const DislocationSegment*>& segments,
@@ -160,9 +167,8 @@ UnwrappedMesh unwrapFaces(const Mesh& mesh, const SimulationCell& cell){
     return unwrapped;
 }
 
-json cellJson(const SimulationCell& cell);
 std::int64_t eulerCharacteristic(const InterfaceMeshTopology& mesh);
-// Writes the vertex and facet tables next to filePath, and returns the document that points to them.
-json writeMeshTables(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell);
+// Writes the unwrapped mesh's vertex and facet tables next to filePath, and returns the document that points to them.
+json meshDocument(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell);
 
 }
