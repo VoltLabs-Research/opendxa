@@ -17,34 +17,6 @@
 
 namespace Volt{
 
-void DislocationAnalysis::reconstructStructure(
-    const LammpsParser::Frame& frame,
-    const std::string& neighborLatticePath,
-    const ClusterGraphExportPaths& clusterPaths,
-    StructureAnalysis& structure,
-    ReconstructedStructureContext& context
-){
-    std::string error;
-    if(!ReconstructedStructureLoader::load(frame, neighborLatticePath, clusterPaths, structure, context, &error)){
-        throw std::runtime_error(error);
-    }
-}
-
-void DislocationAnalysis::mapElastically(ElasticMapping& elasticMap, int crystalPathSteps){
-    ProgressSteps steps({
-        {"Building tessellation edges", 1.0},
-        {"Assigning vertices to clusters", 0.2},
-        {"Assigning ideal vectors to edges", 1.5},
-    });
-    elasticMap.generateTessellationEdges();
-
-    steps.next();
-    elasticMap.assignVerticesToClusters();
-
-    steps.next();
-    elasticMap.assignIdealVectorsToEdges(crystalPathSteps);
-}
-
 void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::string& outputBase){
     if(_clustersTablePath.empty() || _clusterTransitionsPath.empty()){
         throw std::runtime_error("OpenDXA requires --clusters_table and --clusters_transitions for reconstruct Cluster Graph");
@@ -55,15 +27,17 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
 
     DislocationAnalysisLog log(frame);
     FrameAdapter::PreparedAnalysisInput input;
-    std::string inputError;
-    if(!FrameAdapter::prepareAnalysisInput(frame, input, &inputError)){
-        throw std::runtime_error(inputError);
+    std::string error;
+    if(!FrameAdapter::prepareAnalysisInput(frame, input, &error)){
+        throw std::runtime_error(error);
     }
 
     ProgressSteps steps({
         {"Reconstructing structure from the upstream contract", 2.0},
         {"Building the Delaunay tessellation", 4.0},
-        {"Computing the elastic mapping", 2.7},
+        {"Building tessellation edges", 1.0},
+        {"Assigning vertices to clusters", 0.2},
+        {"Assigning ideal vectors to edges", 1.5},
         {"Building the interface mesh", 2.5},
         {"Tracing Burgers circuits", 6.0},
         {"Marking core atoms", 0.3, _exports.coreAtoms},
@@ -74,20 +48,34 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
 
     ReconstructedStructureContext context(input.positions.get(), frame.simulationCell);
     StructureAnalysis structure(context);
-    reconstructStructure(frame, _neighborLatticePath, {_clustersTablePath, _clusterTransitionsPath}, structure, context);
+    if(!ReconstructedStructureLoader::load(
+        frame, _neighborLatticePath, {_clustersTablePath, _clusterTransitionsPath}, structure, context, &error
+    )){
+        throw std::runtime_error(error);
+    }
     log.dump(structure);
 
     steps.next();
     DelaunayTessellation tessellation;
     tessellation.generateTessellation(
-        context.simCell, context.positions->constDataPoint3(), context.atomCount(),
-        _ghostLayerScale * structure.maximumNeighborDistance(), _coverDomainWithFiniteTets, nullptr
+        context.simCell, 
+        context.positions->constDataPoint3(), 
+        context.atomCount(),
+        _ghostLayerScale * structure.maximumNeighborDistance(), 
+        _coverDomainWithFiniteTets, 
+        nullptr
     );
     log.dump(tessellation);
 
     steps.next();
     ElasticMapping elasticMap(structure, tessellation);
-    mapElastically(elasticMap, _crystalPathSteps);
+    elasticMap.generateTessellationEdges();
+
+    steps.next();
+    elasticMap.assignVerticesToClusters();
+
+    steps.next();
+    elasticMap.assignIdealVectorsToEdges(_crystalPathSteps);
     log.dump(elasticMap);
 
     steps.next();
@@ -127,7 +115,14 @@ void DislocationAnalysis::compute(const LammpsParser::Frame& frame, const std::s
 
     steps.next();
     DislocationOutputs{
-        outputBase, _exports, frame, structure, tessellation, interfaceMesh, defectMesh, tracer.network(),
+        outputBase, 
+        _exports, 
+        frame, 
+        structure, 
+        tessellation, 
+        interfaceMesh, 
+        defectMesh, 
+        tracer.network(),
         coreAtomDislocationIds
     }.write();
     log.dump(_exports);

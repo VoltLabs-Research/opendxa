@@ -9,9 +9,6 @@
 
 namespace Volt {
 
-struct ClusterGraphExportPaths;
-class ReconstructedStructureContext;
-
 class DislocationAnalysis{
 public:
     void compute(const LammpsParser::Frame& frame, const std::string& outputBase);
@@ -109,15 +106,6 @@ public:
     }
 
 private:
-    static void reconstructStructure(
-        const LammpsParser::Frame& frame,
-        const std::string& neighborLatticePath,
-        const ClusterGraphExportPaths& clusterPaths,
-        StructureAnalysis& structure,
-        ReconstructedStructureContext& context
-    );
-    static void mapElastically(ElasticMapping& elasticMap, int crystalPathSteps);
-
     std::string _referenceTopologyName;
     std::string _clustersTablePath;
     std::string _clusterTransitionsPath;
