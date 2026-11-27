@@ -1,4 +1,4 @@
-#include <volt/pipeline/defect_cell_index.h>
+#include <volt/helpers/defect_cell_index.h>
 
 #include <boost/iterator/function_output_iterator.hpp>
 

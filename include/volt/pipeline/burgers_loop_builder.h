@@ -3,7 +3,7 @@
 #include <volt/core/volt.h>
 #include <volt/utilities/memory_pool.h>
 #include <volt/helpers/dislocation_network.h>
-#include <volt/pipeline/defect_cell_index.h>
+#include <volt/helpers/defect_cell_index.h>
 #include <volt/pipeline/interface_mesh.h>
 #include <string_view>
 #include <optional>

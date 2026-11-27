@@ -1,4 +1,4 @@
-#include <volt/pipeline/dislocation_outputs.h>
+#include <volt/helpers/dislocation_outputs.h>
 
 #include <volt/analysis/structure_identification_export.h>
 #include <volt/plugin/output_files.h>

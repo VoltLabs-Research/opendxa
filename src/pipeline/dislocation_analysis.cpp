@@ -7,7 +7,7 @@
 #include <volt/core/reconstructed_structure.h>
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/pipeline/delaunay_tessellation.h>
-#include <volt/pipeline/dislocation_analysis_log.h>
+#include <volt/helpers/dislocation_analysis_log.h>
 #include <volt/pipeline/elastic_mapping.h>
 #include <volt/pipeline/interface_mesh.h>
 

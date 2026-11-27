@@ -2,7 +2,7 @@
 
 #include <volt/core/volt.h>
 #include <volt/core/lammps_parser.h>
-#include <volt/pipeline/dislocation_outputs.h>
+#include <volt/helpers/dislocation_outputs.h>
 
 #include <string>
 #include <utility>

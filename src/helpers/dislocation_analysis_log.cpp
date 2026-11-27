@@ -1,10 +1,10 @@
-#include <volt/pipeline/dislocation_analysis_log.h>
+#include <volt/helpers/dislocation_analysis_log.h>
 
 #include <volt/analysis/structure_analysis.h>
 #include <volt/helpers/dislocation_network.h>
 #include <volt/pipeline/burgers_loop_builder.h>
 #include <volt/pipeline/delaunay_tessellation.h>
-#include <volt/pipeline/dislocation_outputs.h>
+#include <volt/helpers/dislocation_outputs.h>
 #include <volt/pipeline/elastic_mapping.h>
 
 #include <spdlog/spdlog.h>
