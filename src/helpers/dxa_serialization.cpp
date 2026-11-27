@@ -1,126 +1,37 @@
-#include <utility>
 #include <volt/helpers/dxa_serialization.h>
 #include <volt/helpers/dxa_serialization_detail.h>
 #include <volt/helpers/dxa_serialization_log.h>
 #include <volt/helpers/burgers_circuit.h>
 #include <volt/helpers/edge_key.h>
 #include <volt/structures/crystal_structure_types.h>
-#include <cassert>
-#include <numeric>
-#include <unordered_set>
-#include <unordered_map>
-#include <algorithm>
-#include <cmath>
-#include <array>
-#include <cstdint>
-#include <map>
-#include <set>
-#include <string>
 #include <volt/utilities/json_utils.h>
 #include <volt/utilities/parquet_line_writer.h>
 #include <volt/utilities/parquet_mesh_writer.h>
+
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
-#include <fstream>
+#include <limits>
+#include <numeric>
+#include <string_view>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
 
 namespace Volt::DxaSerialization {
 
 using namespace Detail;
 
-namespace Detail {
+BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure){
+    LatticeStructureType structure = LATTICE_OTHER;
+    if(!parseLatticeStructureType(crystalStructure, structure)) return OTHER_BURGERS_FAMILY;
 
-Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
-    if(burgersVector.cluster() == nullptr){
-        return burgersVector.localVec();
-    }
-    return burgersVector.toSpatialVector();
-}
-
-std::string burgersVectorLabel(const Vector3& vector){
-    return "[" + std::to_string(vector.x()) + ", "
-        + std::to_string(vector.y()) + ", "
-        + std::to_string(vector.z()) + "]";
-}
-
-const BurgersFamily OTHER_BURGERS_FAMILY{"Other", "Other"};
-
-const CubicBurgersFamily FCC_BURGERS_FAMILIES[] = {
-    {{0.5, 0.5, 0.0}, {"1/2<110>", "1/2<110> (Perfect)"}},
-    {{1.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0}, {"1/6<112>", "1/6<112> (Shockley)"}},
-    {{1.0 / 6.0, 1.0 / 6.0, 0.0}, {"1/6<110>", "1/6<110> (Stair-rod)"}},
-    {{1.0 / 3.0, 0.0, 0.0}, {"1/3<100>", "1/3<100> (Hirth)"}},
-    {{1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0}, {"1/3<111>", "1/3<111> (Frank)"}}
-};
-
-const CubicBurgersFamily BCC_BURGERS_FAMILIES[] = {
-    {{0.5, 0.5, 0.5}, {"1/2<111>", "1/2<111> (Perfect)"}},
-    {{1.0, 0.0, 0.0}, {"<100>", "<100>"}},
-    {{1.0, 1.0, 0.0}, {"<110>", "<110>"}}
-};
-
-const CubicBurgersFamily SC_BURGERS_FAMILIES[] = {
-    {{1.0, 0.0, 0.0}, {"<100>", "<100>"}},
-    {{1.0, 1.0, 0.0}, {"<110>", "<110>"}},
-    {{1.0, 1.0, 1.0}, {"<111>", "<111>"}}
-};
-
-const HexagonalBurgersFamily HCP_BURGERS_FAMILIES[] = {
-    {kHcpA, 0.0, {"1/3<1-210>", "1/3<1-210> (Perfect basal)"}},
-    {kHcpShockley, 0.0, {"1/3<1-100>", "1/3<1-100> (Shockley)"}},
-    {0.0, kHcpC, {"<0001>", "<0001> (Perfect c)"}},
-    {0.0, kHcpHalfC, {"1/2<0001>", "1/2<0001> (Partial c)"}},
-    {kHcpA, kHcpC, {"1/3<1-213>", "1/3<1-213> (Perfect c+a)"}}
-};
-
-template<std::size_t N>
-const BurgersFamily& matchCubicBurgersFamily(
-    const Vector3& localBurgers,
-    const CubicBurgersFamily (&families)[N],
-    double tolerance
-){
-    std::array<double, 3> components{
-        std::abs(localBurgers.x()),
-        std::abs(localBurgers.y()),
-        std::abs(localBurgers.z())
-    };
-    std::sort(components.begin(), components.end(), std::greater<double>());
-    for(const auto& candidate : families){
-        if(std::abs(components[0] - candidate.sortedAbsComponents[0]) < tolerance
-            && std::abs(components[1] - candidate.sortedAbsComponents[1]) < tolerance
-            && std::abs(components[2] - candidate.sortedAbsComponents[2]) < tolerance){
-            return candidate.family;
-        }
+    const std::array<double, 3> signature = burgersSignature(localBurgers, structure);
+    const auto close = [](double a, double b){ return std::abs(a - b) < kBurgersFamilyTolerance; };
+    for(const BurgersFamilyMatch& candidate : burgersFamilies(structure)){
+        if(std::ranges::equal(signature, candidate.signature, close)) return candidate.family;
     }
     return OTHER_BURGERS_FAMILY;
-}
-
-const BurgersFamily& matchHexagonalBurgersFamily(const Vector3& localBurgers, double tolerance){
-    const double basal = std::hypot(localBurgers.x(), localBurgers.y());
-    const double axial = std::abs(localBurgers.z());
-    for(const auto& candidate : HCP_BURGERS_FAMILIES){
-        if(std::abs(basal - candidate.basalLength) < tolerance
-            && std::abs(axial - candidate.axialLength) < tolerance){
-            return candidate.family;
-        }
-    }
-    return OTHER_BURGERS_FAMILY;
-}
-
-int structureTypeOf(const StructureContext& context, std::size_t atomIndex){
-    return context.structureTypes
-        ? context.structureTypes->getInt(atomIndex)
-        : static_cast<int>(StructureType::OTHER);
-}
-
-std::array<std::uint64_t, 3> canonicalFaceKey(const std::array<DelaunayTessellation::VertexHandle, 3>& corners){
-    std::array<std::uint64_t, 3> key{
-        static_cast<std::uint64_t>(corners[0]),
-        static_cast<std::uint64_t>(corners[1]),
-        static_cast<std::uint64_t>(corners[2])
-    };
-    std::sort(key.begin(), key.end());
-    return key;
-}
-
 }
 
 std::vector<std::vector<Point3>> splitAtPeriodicBoundaries(const std::vector<Point3>& line, const SimulationCell& cell){
@@ -193,67 +104,96 @@ std::vector<std::vector<Point3>> splitAtPeriodicBoundaries(const std::vector<Poi
     return pieces;
 }
 
-void streamDelaunayTessellationToFile(
-    const std::string& filePath,
-    const DelaunayTessellation& tessellation
+void streamDislocationsToFile(
+    const std::string& linesFilePath,
+    const std::string& summaryFilePath,
+    const DislocationNetwork& network,
+    const StructureAnalysis& structureAnalysis,
+    const DislocationsExportOptions& options
 ){
-    std::unordered_map<std::uint64_t, int> vertexMap;
-    std::vector<Point3> exportPoints;
-    std::set<std::array<std::uint64_t, 3>> exportedFaces;
-    struct FaceEntry{ std::array<int,3> verts; bool isBoundary; };
-    std::vector<FaceEntry> exportFaces;
-    exportPoints.reserve(tessellation.numberOfPrimaryTetrahedra() * 2);
+    DxaSerializationLog log;
+    const StructureContext& context = structureAnalysis.context();
+    const std::vector<const DislocationSegment*> segments = nonDegenerateSegments(network);
+    const std::vector<DislocationLine> lines = collectLines(segments, context.simCell, options.clipPbcSegments);
+    const LineSummary summary = summarizeLines(
+        lines, network.segments().size() - segments.size(), options.clipPbcSegments
+    );
+    log.dump(summary);
+    writeLinesTable(linesFilePath, lines);
 
+    json doc;
+    doc["main_listing"] = lineListing(summary);
+    doc["export"]["ChartExporter"] = burgersVectorChart(summary);
+    json& listings = doc["sub_listings"];
+    listings["burgers_families"] = burgersFamilyRows(summary);
+    listings["structure_counts"] = structureCountRows(context);
+    if(options.exportDislocationNetworkStats)
+        listings["network_statistics"] = networkStatisticsRows(network, segments, context.simCell.volume3D());
+    if(options.exportCircuitInformation)
+        listings["circuit_information"] = circuitRows(network);
+    if(options.exportJunctions)
+        listings["junction_information"] = junctionRows(network);
+    JsonUtils::writeJsonToParquet(doc, summaryFilePath);
+}
+
+void streamMeshToFile(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell){
+    JsonUtils::writeJsonToParquet(writeMeshTables(filePath, mesh, cell), filePath);
+}
+
+void streamInterfaceMeshToFile(const std::string& filePath, const InterfaceMesh& interfaceMesh){
+    json doc = writeMeshTables(filePath, interfaceMesh, interfaceMesh.structureAnalysis().context().simCell);
+    doc["topology"]["is_completely_good"] = interfaceMesh.isCompletelyGood();
+    doc["topology"]["is_completely_bad"] = interfaceMesh.isCompletelyBad();
+    JsonUtils::writeJsonToParquet(doc, filePath);
+}
+
+void streamDelaunayTessellationToFile(const std::string& filePath, const DelaunayTessellation& tessellation){
+    using CellHandle = DelaunayTessellation::CellHandle;
+    const auto isPrimary = [&](CellHandle cell){
+        return tessellation.isValidCell(cell) && !tessellation.isGhostCell(cell);
+    };
+
+    std::unordered_map<DelaunayTessellation::VertexHandle, int> pointOfVertex;
+    json points = json::array();
+    json facets = json::array();
     int primaryTetrahedra = 0, boundaryFacets = 0, internalFacets = 0;
-
-    for(DelaunayTessellation::CellHandle cell : tessellation.cells()){
-        if(!tessellation.isValidCell(cell) || tessellation.isGhostCell(cell)) continue;
+    for(CellHandle cell : tessellation.cells()){
+        if(!isPrimary(cell)) continue;
         ++primaryTetrahedra;
         for(int face = 0; face < 4; ++face){
-            std::array<DelaunayTessellation::VertexHandle, 3> corners;
-            for(int corner = 0; corner < 3; ++corner){
-                corners[corner] = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, corner));
-            }
-            if(!exportedFaces.insert(canonicalFaceKey(corners)).second) continue;
-
-            const DelaunayTessellation::CellHandle neighbor = tessellation.mirrorFacet(cell, face).first;
-            const bool isBoundary = !tessellation.isValidCell(neighbor) || tessellation.isGhostCell(neighbor);
+            const CellHandle neighbor = tessellation.mirrorFacet(cell, face).first;
+            const bool isBoundary = !isPrimary(neighbor);
+            // A facet between two primary cells is written once, by the first of them.
+            if(!isBoundary && neighbor < cell) continue;
             isBoundary ? ++boundaryFacets : ++internalFacets;
 
-            std::array<int, 3> faceIdx{};
+            json corners = json::array();
             for(int corner = 0; corner < 3; ++corner){
-                const auto handle = corners[corner];
-                auto [it, inserted] = vertexMap.emplace(static_cast<uint64_t>(handle), static_cast<int>(exportPoints.size()));
-                if(inserted) exportPoints.push_back(tessellation.vertexPosition(handle));
-                faceIdx[corner] = it->second;
+                const auto vertex = tessellation.cellVertex(cell, DelaunayTessellation::cellFacetVertexIndex(face, corner));
+                const auto [it, inserted] = pointOfVertex.emplace(vertex, static_cast<int>(points.size()));
+                if(inserted){
+                    const Point3 position = tessellation.vertexPosition(vertex);
+                    points.push_back({
+                        {"index", static_cast<std::int64_t>(it->second)},
+                        {"position", {position.x(), position.y(), position.z()}}
+                    });
+                }
+                corners.push_back(it->second);
             }
-            exportFaces.push_back({faceIdx, isBoundary});
+            facets.push_back({{"vertices", std::move(corners)}});
         }
-    }
-
-    json points = json::array();
-    for(size_t i = 0; i < exportPoints.size(); ++i){
-        points.push_back({
-            {"index", static_cast<int64_t>(i)},
-            {"position", {exportPoints[i].x(), exportPoints[i].y(), exportPoints[i].z()}}
-        });
-    }
-    json facets = json::array();
-    for(const auto& f : exportFaces){
-        facets.push_back({{"vertices", {f.verts[0], f.verts[1], f.verts[2]}}});
     }
 
     json doc;
     doc["main_listing"] = {
         {"total_primary_tetrahedra", primaryTetrahedra},
-        {"total_nodes", static_cast<int64_t>(exportPoints.size())},
-        {"total_facets", static_cast<int64_t>(exportFaces.size())},
+        {"total_nodes", static_cast<std::int64_t>(points.size())},
+        {"total_facets", static_cast<std::int64_t>(facets.size())},
         {"boundary_facets", boundaryFacets},
         {"internal_facets", internalFacets}
     };
     doc["sub_listings"] = {{"points", points}, {"facets", facets}};
-    doc["export"]["MeshExporter"] = {{"vertices", points}, {"facets", facets}};
-
+    doc["export"]["MeshExporter"] = {{"vertices", std::move(points)}, {"facets", std::move(facets)}};
     JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
@@ -273,13 +213,10 @@ void streamCoherentCrystallineRegionsToFile(
     }
 
     int largestRegionSize = 0;
-    for(const auto& [_, indices] : atomIndicesByCluster)
-        largestRegionSize = std::max(largestRegionSize, static_cast<int>(indices.size()));
-
-    const int assignedAtoms = static_cast<int>(context.atomCount()) - unassignedAtoms;
     json regions = json::array();
     json atomisticExporter = json::object();
     for(const auto& [clusterId, atomIndices] : atomIndicesByCluster){
+        largestRegionSize = std::max(largestRegionSize, static_cast<int>(atomIndices.size()));
         const int stype = structureTypeOf(context, atomIndices.front());
         const Cluster* cluster = structureAnalysis.clusterGraph().findCluster(clusterId);
         const std::string clusterName = "Cluster " + std::to_string(clusterId);
@@ -311,133 +248,76 @@ void streamCoherentCrystallineRegionsToFile(
     doc["main_listing"] = {
         {"total_atoms", static_cast<int64_t>(context.atomCount())},
         {"coherent_region_count", static_cast<int64_t>(atomIndicesByCluster.size())},
-        {"assigned_atoms", assignedAtoms},
+        {"assigned_atoms", static_cast<int>(context.atomCount()) - unassignedAtoms},
         {"unassigned_atoms", unassignedAtoms},
         {"largest_region_size", largestRegionSize}
     };
     doc["sub_listings"] = {{"coherent_crystalline_regions", regions}};
     doc["export"]["AtomisticExporter"] = std::move(atomisticExporter);
-
     JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
 namespace Detail {
 
-std::array<const DislocationNode*, 2> endNodes(const DislocationSegment& segment){
-    return {&segment.forwardNode(), &segment.backwardNode()};
+std::array<double, 3> burgersSignature(const Vector3& localBurgers, LatticeStructureType structure){
+    if(structure == LATTICE_HCP || structure == LATTICE_HEX_DIAMOND){
+        return {std::hypot(localBurgers.x(), localBurgers.y()), std::abs(localBurgers.z()), 0.0};
+    }
+    std::array<double, 3> components{std::abs(localBurgers.x()), std::abs(localBurgers.y()), std::abs(localBurgers.z())};
+    std::ranges::sort(components, std::greater<>());
+    return components;
 }
 
-int countDanglingSegments(const DislocationNetwork& network){
-    return static_cast<int>(std::ranges::count_if(network.segments(), [](const DislocationSegment* segment){
-        return segment && (segment->forwardNode().isDangling() || segment->backwardNode().isDangling());
-    }));
-}
-
-json getNetworkStatistics(const DislocationNetwork& network, double cellVolume){
-    const auto& segments = network.segments();
-
-    // Summed in segment order, so the totals are the same with any thread count.
-    double totalLength = 0.0;
-    int segmentCount = 0;
-    for(const DislocationSegment* segment : segments){
-        if(!segment || segment->isDegenerate()) continue;
-        totalLength += segment->calculateLength();
-        ++segmentCount;
-    }
-
-    return json::array({json{
-        {"total_network_length", totalLength},
-        {"segment_count", segmentCount},
-        {"junction_count", static_cast<int>(network.junctionArmCounts().size())},
-        {"dangling_segments", countDanglingSegments(network)},
-        {"average_segment_length", segmentCount > 0 ? totalLength / segmentCount : 0.0},
-        {"density", cellVolume > 0 ? totalLength / cellVolume : 0.0},
-        {"total_segments_including_degenerate", static_cast<int>(segments.size())}
-    }});
-}
-
-json getJunctionInformation(const DislocationNetwork& network){
-    const std::vector<int> junctionArms = network.junctionArmCounts();
-    std::map<int, int> junctionArmDistribution;
-    for(const int arms : junctionArms){
-        junctionArmDistribution[arms]++;
-    }
-    const int totalJunctions = static_cast<int>(junctionArms.size());
-
-    json junctionInfo = json::array();
-    if(junctionArmDistribution.empty()){
-        junctionInfo.push_back({
-            {"junction_arms", 0},
-            {"junction_count", 0},
-            {"total_junctions", totalJunctions}
-        });
-        return junctionInfo;
-    }
-    for(const auto& [junctionArms, junctionCount] : junctionArmDistribution){
-        junctionInfo.push_back({
-            {"junction_arms", junctionArms},
-            {"junction_count", junctionCount},
-            {"total_junctions", totalJunctions}
-        });
-    }
-    return junctionInfo;
-}
-
-json getCircuitInformation(const DislocationNetwork& network){
-    std::vector<int> edgeCounts;
-    int danglingCircuits = 0;
-    int blockedCircuits = 0;
-    for(const DislocationSegment* segment : network.segments()){
-        if(!segment) continue;
-        for(const DislocationNode* node : endNodes(*segment)){
-            const BurgersCircuit* circuit = node->circuit;
-            if(!circuit) continue;
-            edgeCounts.push_back(circuit->edgeCount);
-            if(circuit->isDangling) danglingCircuits++;
-            if(circuit->isCompletelyBlocked) blockedCircuits++;
-        }
-    }
-
-    const double averageEdgeCount = edgeCounts.empty()
-        ? 0.0
-        : std::accumulate(edgeCounts.begin(), edgeCounts.end(), 0.0) / edgeCounts.size();
-
-    return json::array({json{
-        {"total_circuits", static_cast<int>(edgeCounts.size())},
-        {"dangling_circuits", danglingCircuits},
-        {"blocked_circuits", blockedCircuits},
-        {"average_edge_count", averageEdgeCount},
-        {"edge_count_min", edgeCounts.empty() ? 0 : *std::ranges::min_element(edgeCounts)},
-        {"edge_count_max", edgeCounts.empty() ? 0 : *std::ranges::max_element(edgeCounts)}
-    }});
-}
-
-}
-
-BurgersFamily classifyBurgersFamily(const Vector3& localBurgers, const std::string& crystalStructure){
-    LatticeStructureType structure = LATTICE_OTHER;
-    if(crystalStructure.empty() || !parseLatticeStructureType(crystalStructure, structure)){
-        return OTHER_BURGERS_FAMILY;
-    }
-
-    constexpr double tolerance = 0.01;
+std::span<const BurgersFamilyMatch> burgersFamilies(LatticeStructureType structure){
+    static const BurgersFamilyMatch fcc[] = {
+        {{0.5, 0.5, 0.0}, {"1/2<110>", "1/2<110> (Perfect)"}},
+        {{1.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0}, {"1/6<112>", "1/6<112> (Shockley)"}},
+        {{1.0 / 6.0, 1.0 / 6.0, 0.0}, {"1/6<110>", "1/6<110> (Stair-rod)"}},
+        {{1.0 / 3.0, 0.0, 0.0}, {"1/3<100>", "1/3<100> (Hirth)"}},
+        {{1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0}, {"1/3<111>", "1/3<111> (Frank)"}}
+    };
+    static const BurgersFamilyMatch bcc[] = {
+        {{0.5, 0.5, 0.5}, {"1/2<111>", "1/2<111> (Perfect)"}},
+        {{1.0, 0.0, 0.0}, {"<100>", "<100>"}},
+        {{1.0, 1.0, 0.0}, {"<110>", "<110>"}}
+    };
+    static const BurgersFamilyMatch sc[] = {
+        {{1.0, 0.0, 0.0}, {"<100>", "<100>"}},
+        {{1.0, 1.0, 0.0}, {"<110>", "<110>"}},
+        {{1.0, 1.0, 1.0}, {"<111>", "<111>"}}
+    };
+    constexpr double a = 0.7071067811865476;
+    constexpr double shockley = 0.4082482904638630; 
+    constexpr double c = 1.1547005383792515;
+    static const BurgersFamilyMatch hcp[] = {
+        {{a, 0.0, 0.0}, {"1/3<1-210>", "1/3<1-210> (Perfect basal)"}},
+        {{shockley, 0.0, 0.0}, {"1/3<1-100>", "1/3<1-100> (Shockley)"}},
+        {{0.0, c, 0.0}, {"<0001>", "<0001> (Perfect c)"}},
+        {{0.0, c / 2, 0.0}, {"1/2<0001>", "1/2<0001> (Partial c)"}},
+        {{a, c, 0.0}, {"1/3<1-213>", "1/3<1-213> (Perfect c+a)"}}
+    };
     switch(structure){
         case LATTICE_FCC:
         case LATTICE_CUBIC_DIAMOND:
-            return matchCubicBurgersFamily(localBurgers, FCC_BURGERS_FAMILIES, tolerance);
+            return fcc;
         case LATTICE_BCC:
-            return matchCubicBurgersFamily(localBurgers, BCC_BURGERS_FAMILIES, tolerance);
+            return bcc;
         case LATTICE_SC:
-            return matchCubicBurgersFamily(localBurgers, SC_BURGERS_FAMILIES, tolerance);
+            return sc;
         case LATTICE_HCP:
         case LATTICE_HEX_DIAMOND:
-            return matchHexagonalBurgersFamily(localBurgers, tolerance);
+            return hcp;
         default:
-            return OTHER_BURGERS_FAMILY;
+            return {};
     }
 }
 
-namespace Detail {
+Vector3 getGlobalBurgersVector(const ClusterVector& burgersVector){
+    if(burgersVector.cluster() == nullptr){
+        return burgersVector.localVec();
+    }
+    return burgersVector.toSpatialVector();
+}
 
 std::vector<const DislocationSegment*> nonDegenerateSegments(const DislocationNetwork& network){
     std::vector<const DislocationSegment*> segments;
@@ -494,31 +374,23 @@ std::vector<DislocationLine> collectLines(
 
 // Lines of a named family are charted under its label, the others under their own Burgers vector.
 std::string burgersChartKey(const SegmentProperties& segment){
-    return segment.family.name != OTHER_BURGERS_FAMILY.name
-        ? segment.family.label
-        : burgersVectorLabel(segment.burgersLocal);
-}
-
-void addToTally(FamilyTally& tally, double length){
-    tally.segmentCount++;
-    tally.totalLength += length;
+    if(segment.family.name != OTHER_BURGERS_FAMILY.name) return segment.family.label;
+    const Vector3& b = segment.burgersLocal;
+    return "[" + std::to_string(b.x()) + ", " + std::to_string(b.y()) + ", " + std::to_string(b.z()) + "]";
 }
 
 LineSummary summarizeLines(const std::vector<DislocationLine>& lines, std::size_t skippedSegments, bool clipped){
-    LineSummary summary;
-    summary.skippedSegments = skippedSegments;
-    summary.lineCount = lines.size();
-    summary.clipped = clipped;
+    LineSummary summary{.skippedSegments = skippedSegments, .lineCount = lines.size(), .clipped = clipped};
     double minLength = std::numeric_limits<double>::max();
     for(const DislocationLine& line : lines){
         summary.totalLength += line.length;
         summary.totalPoints += line.points.size();
         summary.maxLength = std::max(summary.maxLength, line.length);
         minLength = std::min(minLength, line.length);
-        addToTally(summary.byBurgersVector[burgersChartKey(line.segment)], line.length);
+        summary.byBurgersVector[burgersChartKey(line.segment)].add(line.length);
         FamilyTally& family = summary.byFamily[line.segment.family.name];
         family.label = line.segment.family.label;
-        addToTally(family, line.length);
+        family.add(line.length);
     }
     summary.minLength = lines.empty() ? 0 : minLength;
     summary.meanLength = lines.empty() ? 0.0 : summary.totalLength / lines.size();
@@ -526,8 +398,7 @@ LineSummary summarizeLines(const std::vector<DislocationLine>& lines, std::size_
 }
 
 void writeLinesTable(const std::string& filePath, const std::vector<DislocationLine>& lines){
-    auto vecAsList = [](const Vector3& v){ return std::vector<double>{v.x(), v.y(), v.z()}; };
-    auto pointAsList = [](const Point3& p){ return std::vector<double>{p.x(), p.y(), p.z()}; };
+    const auto xyz = [](const auto& v){ return std::vector<double>{v.x(), v.y(), v.z()}; };
     streamLinesToParquet(
         filePath,
         lines.size(),
@@ -538,17 +409,28 @@ void writeLinesTable(const std::string& filePath, const std::vector<DislocationL
             writer.field("length", line.length);
             writer.field("num_points", static_cast<std::int64_t>(line.points.size()));
             writer.field("magnitude", segment.magnitude);
-            writer.field("burgers_vector_local", vecAsList(segment.burgersLocal));
-            writer.field("burgers_vector_global", vecAsList(segment.burgersGlobal));
+            writer.field("burgers_vector_local", xyz(segment.burgersLocal));
+            writer.field("burgers_vector_global", xyz(segment.burgersGlobal));
             writer.field("crystal_structure", segment.crystalStructure);
             writer.field("burgers_family", segment.family.name);
             writer.field("burgers_family_label", segment.family.label);
             writer.field("cluster_id", static_cast<std::int64_t>(segment.clusterId));
             writer.field("segment_id", static_cast<std::int64_t>(segment.segmentId));
-            writer.field("head_vertex", pointAsList(line.points.empty() ? Point3::Origin() : line.points.front()));
-            writer.field("tail_vertex", pointAsList(line.points.empty() ? Point3::Origin() : line.points.back()));
+            writer.field("head_vertex", xyz(line.points.front()));
+            writer.field("tail_vertex", xyz(line.points.back()));
         }
     );
+}
+
+json lineListing(const LineSummary& summary){
+    return {
+        {"dislocations", static_cast<int64_t>(summary.lineCount)},
+        {"total_points", static_cast<int64_t>(summary.totalPoints)},
+        {"average_segment_length", summary.meanLength},
+        {"max_segment_length", summary.maxLength},
+        {"min_segment_length", summary.minLength},
+        {"total_length", summary.totalLength}
+    };
 }
 
 json burgersVectorChart(const LineSummary& summary){
@@ -561,17 +443,6 @@ json burgersVectorChart(const LineSummary& summary){
     return {
         {"burgers_counts", {{"burgers_vector", burgersLabels}, {"segment_count", segmentCounts}}},
         {"burgers_lengths", {{"burgers_vector", burgersLabels}, {"total_length", burgersLengths}}}
-    };
-}
-
-json lineListing(std::size_t lineCount, const LineSummary& summary){
-    return {
-        {"dislocations", static_cast<int64_t>(lineCount)},
-        {"total_points", static_cast<int64_t>(summary.totalPoints)},
-        {"average_segment_length", summary.meanLength},
-        {"max_segment_length", summary.maxLength},
-        {"min_segment_length", summary.minLength},
-        {"total_length", summary.totalLength}
     };
 }
 
@@ -609,70 +480,96 @@ json structureCountRows(const StructureContext& context){
     return rows;
 }
 
-json networkListings(
+json networkStatisticsRows(
     const DislocationNetwork& network,
-    double cellVolume,
-    const DislocationsExportOptions& options,
-    const LineSummary& summary,
-    const StructureContext& structureContext
+    const std::vector<const DislocationSegment*>& segments,
+    double cellVolume
 ){
-    json listings;
-    if(options.exportDislocationNetworkStats)
-        listings["network_statistics"] = getNetworkStatistics(network, cellVolume);
-    if(options.exportCircuitInformation)
-        listings["circuit_information"] = getCircuitInformation(network);
-    if(options.exportJunctions)
-        listings["junction_information"] = getJunctionInformation(network);
-    listings["burgers_families"] = burgersFamilyRows(summary);
-    listings["structure_counts"] = structureCountRows(structureContext);
-    return listings;
+    // Summed in segment order, so the total is the same with any thread count.
+    double totalLength = 0.0;
+    for(const DislocationSegment* segment : segments){
+        totalLength += segment->calculateLength();
+    }
+    const int segmentCount = static_cast<int>(segments.size());
+    const auto danglingSegments = std::ranges::count_if(network.segments(), [](const DislocationSegment* segment){
+        return segment && (segment->forwardNode().isDangling() || segment->backwardNode().isDangling());
+    });
+
+    return json::array({json{
+        {"total_network_length", totalLength},
+        {"segment_count", segmentCount},
+        {"junction_count", static_cast<int>(network.junctionArmCounts().size())},
+        {"dangling_segments", static_cast<int>(danglingSegments)},
+        {"average_segment_length", segmentCount > 0 ? totalLength / segmentCount : 0.0},
+        {"density", cellVolume > 0 ? totalLength / cellVolume : 0.0},
+        {"total_segments_including_degenerate", static_cast<int>(network.segments().size())}
+    }});
 }
 
+json circuitRows(const DislocationNetwork& network){
+    std::vector<int> edgeCounts;
+    int danglingCircuits = 0;
+    int blockedCircuits = 0;
+    for(const DislocationSegment* segment : network.segments()){
+        if(!segment) continue;
+        for(const DislocationNode* node : {&segment->forwardNode(), &segment->backwardNode()}){
+            const BurgersCircuit* circuit = node->circuit;
+            if(!circuit) continue;
+            edgeCounts.push_back(circuit->edgeCount);
+            if(circuit->isDangling) danglingCircuits++;
+            if(circuit->isCompletelyBlocked) blockedCircuits++;
+        }
+    }
+
+    const double averageEdgeCount = edgeCounts.empty()
+        ? 0.0
+        : std::accumulate(edgeCounts.begin(), edgeCounts.end(), 0.0) / edgeCounts.size();
+
+    return json::array({json{
+        {"total_circuits", static_cast<int>(edgeCounts.size())},
+        {"dangling_circuits", danglingCircuits},
+        {"blocked_circuits", blockedCircuits},
+        {"average_edge_count", averageEdgeCount},
+        {"edge_count_min", edgeCounts.empty() ? 0 : *std::ranges::min_element(edgeCounts)},
+        {"edge_count_max", edgeCounts.empty() ? 0 : *std::ranges::max_element(edgeCounts)}
+    }});
 }
 
-void streamDislocationsToFile(
-    const std::string& linesFilePath,
-    const std::string& summaryFilePath,
-    const DislocationNetwork& network,
-    const StructureAnalysis& structureAnalysis,
-    const DislocationsExportOptions& options
-){
-    DxaSerializationLog log;
-    const SimulationCell& simulationCell = structureAnalysis.context().simCell;
-    const std::vector<const DislocationSegment*> segments = nonDegenerateSegments(network);
-    const std::vector<DislocationLine> lines = collectLines(segments, simulationCell, options.clipPbcSegments);
-    const LineSummary summary = summarizeLines(
-        lines, network.segments().size() - segments.size(), options.clipPbcSegments
-    );
-    log.dump(summary);
-    writeLinesTable(linesFilePath, lines);
+json junctionRows(const DislocationNetwork& network){
+    const std::vector<int> junctionArms = network.junctionArmCounts();
+    std::map<int, int> junctionsByArms;
+    for(const int arms : junctionArms){
+        junctionsByArms[arms]++;
+    }
+    // A network without junctions gets one row, of junctions with no arms.
+    if(junctionsByArms.empty()) junctionsByArms[0] = 0;
 
-    json doc;
-    doc["export"]["ChartExporter"] = burgersVectorChart(summary);
-    doc["main_listing"] = lineListing(lines.size(), summary);
-    doc["sub_listings"] = networkListings(
-        network, simulationCell.volume3D(), options, summary, structureAnalysis.context()
-    );
-    JsonUtils::writeJsonToParquet(doc, summaryFilePath);
+    json rows = json::array();
+    for(const auto& [arms, count] : junctionsByArms){
+        rows.push_back({
+            {"junction_arms", arms},
+            {"junction_count", count},
+            {"total_junctions", static_cast<int>(junctionArms.size())}
+        });
+    }
+    return rows;
 }
 
-namespace Detail {
-
-std::string withoutParquetExtension(const std::string& filePath){
-    constexpr std::string_view extension = ".parquet";
-    return filePath.ends_with(extension) ? filePath.substr(0, filePath.size() - extension.size()) : filePath;
-}
-
-json columnJson(const AffineTransformation& matrix, int column){
-    return {matrix.column(column).x(), matrix.column(column).y(), matrix.column(column).z()};
+int structureTypeOf(const StructureContext& context, std::size_t atomIndex){
+    return context.structureTypes
+        ? context.structureTypes->getInt(atomIndex)
+        : static_cast<int>(StructureType::OTHER);
 }
 
 json cellJson(const SimulationCell& cell){
-    const auto& matrix = cell.matrix();
+    const auto column = [&](int i){
+        const Vector3 v = cell.matrix().column(i);
+        return json{v.x(), v.y(), v.z()};
+    };
     const auto& pbc = cell.pbcFlags();
     return {
-        {"matrix", {columnJson(matrix, 0), columnJson(matrix, 1), columnJson(matrix, 2)}},
-        {"origin", columnJson(matrix, 3)},
+        {"matrix", {column(0), column(1), column(2)}},
+        {"origin", column(3)},
         {"pbc", {pbc[0], pbc[1], pbc[2]}}
     };
 }
@@ -694,11 +591,13 @@ std::int64_t eulerCharacteristic(const InterfaceMeshTopology& mesh){
         + static_cast<int64_t>(mesh.faces().size());
 }
 
-// Writes the vertex and facet tables next to filePath, and returns the document that points to them.
 json writeMeshTables(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell){
     const UnwrappedMesh unwrapped = unwrapFaces(mesh, cell);
 
-    const std::string basePath = withoutParquetExtension(filePath);
+    constexpr std::string_view extension = ".parquet";
+    const std::string basePath = filePath.ends_with(extension)
+        ? filePath.substr(0, filePath.size() - extension.size())
+        : filePath;
     const std::string verticesPath = basePath + ".vertices.parquet";
     const std::string facetsPath = basePath + ".facets.parquet";
     streamMeshTablesToParquet(verticesPath, facetsPath, unwrapped.points, unwrapped.faces);
@@ -719,17 +618,6 @@ json writeMeshTables(const std::string& filePath, const InterfaceMeshTopology& m
     return doc;
 }
 
-}
-
-void streamMeshToFile(const std::string& filePath, const InterfaceMeshTopology& mesh, const SimulationCell& cell){
-    JsonUtils::writeJsonToParquet(writeMeshTables(filePath, mesh, cell), filePath);
-}
-
-void streamInterfaceMeshToFile(const std::string& filePath, const InterfaceMesh& interfaceMesh){
-    json doc = writeMeshTables(filePath, interfaceMesh, interfaceMesh.structureAnalysis().context().simCell);
-    doc["topology"]["is_completely_good"] = interfaceMesh.isCompletelyGood();
-    doc["topology"]["is_completely_bad"] = interfaceMesh.isCompletelyBad();
-    JsonUtils::writeJsonToParquet(doc, filePath);
 }
 
 }
