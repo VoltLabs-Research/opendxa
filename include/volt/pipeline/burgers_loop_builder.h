@@ -78,6 +78,8 @@ private:
 	// Bounds the walk around a vertex, should its fan of facets not close.
 	static constexpr int kMaxFanSteps = 1000;
 
+	class RingSets;
+
 	// Breadth-first search over free edges, at most maxDepth edges away from its start vertex.
 	class CircuitSearch{
 	public:

@@ -9,6 +9,9 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
+#include <cstdint>
+#include <numeric>
+#include <optional>
 #include <ranges>
 #include <array>
 #include <algorithm>
@@ -887,10 +890,71 @@ void BurgersLoopBuilder::createSecondarySegments(int maxCircuitLength){
 	}
 }
 
+// Disjoint sets over the dangling nodes that linkAdjacentCircuits keeps equal to their junction rings, so that asking
+// whether two nodes share a ring does not walk it. Rings grow to thousands of nodes along a grain boundary full of
+// dangling circuits, and walking one for each edge two circuits share made linking quadratic in the ring size.
+class BurgersLoopBuilder::RingSets{
+public:
+    explicit RingSets(std::size_t count) : _parent(count), _size(count, 1){
+        std::iota(_parent.begin(), _parent.end(), std::size_t{0});
+    }
+
+    std::size_t find(std::size_t i){
+        while(_parent[i] != i){
+            _parent[i] = _parent[_parent[i]];
+            i = _parent[i];
+        }
+        return i;
+    }
+
+    void unite(std::size_t a, std::size_t b){
+        a = find(a);
+        b = find(b);
+        if(a == b) return;
+        if(_size[a] < _size[b]) std::swap(a, b);
+        _parent[b] = a;
+        _size[a] += _size[b];
+    }
+
+private:
+    std::vector<std::size_t> _parent;
+    std::vector<std::size_t> _size;
+};
+
 // Puts the nodes whose circuits share edges into one junction ring, and marks a circuit completely blocked when other
-// circuits hold all the edges beyond it.
+// circuits hold all the edges beyond it. Whether two nodes already share a ring is asked of disjoint sets that follow
+// the rings, which are built once from the rings as they are; a node outside the dangling list, which a dangling
+// circuit should never border, sends every later question back to the ring itself.
 void BurgersLoopBuilder::linkAdjacentCircuits(){
-	for(DislocationNode* node : danglingNodes()){
+	const std::vector<DislocationNode*>& nodes = danglingNodes();
+	for(std::size_t i = 0; i < nodes.size(); ++i){
+		nodes[i]->circuit->linkIndex = i;
+	}
+	const auto indexOf = [&](const DislocationNode* node) -> std::optional<std::size_t>{
+		const std::size_t i = node->circuit->linkIndex;
+		if(i < nodes.size() && nodes[i] == node) return i;
+		return std::nullopt;
+	};
+
+	RingSets rings(nodes.size());
+	bool ringsFollowed = true;
+	std::vector<std::uint8_t> seen(nodes.size(), 0);
+	for(std::size_t i = 0; i < nodes.size(); ++i){
+		if(seen[i]) continue;
+		seen[i] = 1;
+		for(DislocationNode* member = nodes[i]->junctionRing; member != nodes[i]; member = member->junctionRing){
+			const auto j = indexOf(member);
+			if(!j){
+				ringsFollowed = false;
+				continue;
+			}
+			seen[*j] = 1;
+			rings.unite(i, *j);
+		}
+	}
+
+	for(std::size_t i = 0; i < nodes.size(); ++i){
+		DislocationNode* node = nodes[i];
 		BurgersCircuit* circuit = node->circuit;
 		assert(circuit->isDangling);
 
@@ -906,8 +970,13 @@ void BurgersLoopBuilder::linkAdjacentCircuits(){
 			if(adjacentCircuit != circuit){
 				assert(adjacentCircuit->isDangling);
 				DislocationNode* adjacentNode = adjacentCircuit->dislocationNode;
-				if(!node->formsJunctionWith(adjacentNode)){
+				const auto j = ringsFollowed ? indexOf(adjacentNode) : std::nullopt;
+				if(!j) ringsFollowed = false;
+
+				const bool sameRing = j ? rings.find(i) == rings.find(*j) : node->formsJunctionWith(adjacentNode);
+				if(!sameRing){
 					node->connectNodes(adjacentNode);
+					if(j) rings.unite(i, *j);
 				}
 			}
 			edge = edge->nextCircuitEdge;

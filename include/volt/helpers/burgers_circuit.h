@@ -29,6 +29,9 @@ struct BurgersCircuit{
 
     bool isDangling = true;
 
+    // Scratch for BurgersLoopBuilder::linkAdjacentCircuits: the circuit's position in the dangling nodes it links.
+    std::size_t linkIndex = 0;
+
 	// Bound the walks around the edge ring below, so that a ring a bug left open or tangled cannot hang them.
 	static constexpr std::size_t kRingWalkSlack = 100;
 	static constexpr std::size_t kMaxCountedEdges = 10000;
